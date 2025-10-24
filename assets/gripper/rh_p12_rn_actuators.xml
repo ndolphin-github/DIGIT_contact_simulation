@@ -1,0 +1,15 @@
+<!-- RH-P12-RN Gripper Actuators -->
+<mujoco>
+  <actuator>
+    <!-- Single actuator for synchronized gripper motion -->
+    <position name="gripper_actuator" joint="rh_p12_rn_right" ctrlrange="0 1.6" kp="100" kv="10" forcerange="-1000 1000"/>
+  </actuator>
+  
+  <equality>
+    <!-- Synchronize left finger with right finger (mirrored motion) -->
+    <joint joint1="rh_p12_rn_right" joint2="rh_p12_rn_left" polycoef="0 1 0 0 0"/>
+    <!-- Keep fingertips parallel by moving them opposite to main fingers -->
+    <joint joint1="rh_p12_rn_right" joint2="rh_r2" polycoef="0 1 0 0 0"/>
+    <joint joint1="rh_p12_rn_left" joint2="rh_l2" polycoef="0 1 0 0 0"/>
+  </equality>
+</mujoco>

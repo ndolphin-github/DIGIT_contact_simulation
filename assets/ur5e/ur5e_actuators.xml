@@ -1,0 +1,41 @@
+<!-- UR5e Actuators -->
+<mujoco>
+  <actuator>
+    <!-- Joint actuators with PID control -->
+    <general name="shoulder_pan_actuator" joint="shoulder_pan_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="0 6.28" 
+             gainprm="2000" biasprm="0 -2000 -400"
+             forcerange="-150 150"/>
+             
+    <general name="shoulder_lift_actuator" joint="shoulder_lift_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="-3.14 3.14" 
+             gainprm="2000" biasprm="0 -2000 -400"
+             forcerange="-150 150"/>
+             
+    <general name="elbow_actuator" joint="elbow_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="-3.1415 3.1415" 
+             gainprm="2000" biasprm="0 -2000 -400"
+             forcerange="-150 150"/>
+             
+    <general name="wrist_1_actuator" joint="wrist_1_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="-3.14 3.14" 
+             gainprm="500" biasprm="0 -500 -100"
+             forcerange="-28 28"/>
+             
+    <general name="wrist_2_actuator" joint="wrist_2_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="-3.14 3.14" 
+             gainprm="500" biasprm="0 -500 -100"
+             forcerange="-28 28"/>
+             
+    <general name="wrist_3_actuator" joint="wrist_3_joint" 
+             gaintype="fixed" biastype="affine" 
+             ctrlrange="-3.14 3.14" 
+             gainprm="500" biasprm="0 -500 -100"
+             forcerange="-28 28"/>
+  </actuator>
+</mujoco>

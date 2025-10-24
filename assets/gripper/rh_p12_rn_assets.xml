@@ -1,0 +1,15 @@
+<!-- RH-P12-RN Gripper Assets -->
+<mujoco>
+  <asset>
+    <!-- Materials -->
+    <material name="gripper_grey" rgba="0.5 0.5 0.5 1"/>
+    <material name="gripper_dark" rgba="0.3 0.3 0.3 1"/>
+
+    <!-- Meshes -->
+    <mesh file="../../RH-P12-RN/rh_p12_rn_description/meshes/base.stl" scale="0.001 0.001 0.001"/>
+    <mesh file="../../RH-P12-RN/rh_p12_rn_description/meshes/r1.stl" scale="0.001 0.001 0.001"/>
+    <mesh file="../../RH-P12-RN/rh_p12_rn_description/meshes/r2.stl" scale="0.001 0.001 0.001"/>
+    <mesh file="../../RH-P12-RN/rh_p12_rn_description/meshes/l1.stl" scale="0.001 0.001 0.001"/>
+    <mesh file="../../RH-P12-RN/rh_p12_rn_description/meshes/l2.stl" scale="0.001 0.001 0.001"/>
+  </asset>
+</mujoco>

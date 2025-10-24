@@ -1,0 +1,38 @@
+<!-- RH-P12-RN Gripper Body Structure -->
+<mujoco>
+  <worldbody>
+    <!-- RH-P12-RN Base -->
+    <body name="rh_p12_rn_base" pos="0 0 0">
+      <inertial mass="0.236" pos="0 0 0.032" diaginertia="0.00017 0.00011 0.00017"/>
+      <geom mesh="base" material="gripper_grey" type="mesh"/>
+      
+      <!-- Right Finger Chain -->
+      <body name="rh_p12_rn_r1" pos="0 0.008 0.048">
+        <inertial mass="0.068" pos="0 0.034 0.004" diaginertia="0.00004 0.00002 0.00002"/>
+        <joint name="rh_p12_rn_right" axis="1 0 0" range="0 1.6" armature="0.01" damping="0.7" limited="true"/>
+        <geom mesh="r1" material="gripper_grey" type="mesh"/>
+        
+        <!-- Right Finger Tip -->
+        <body name="rh_p12_rn_r2" pos="0 0.0493634 0.0285">
+          <inertial mass="0.022" pos="0 0.006 0.011" diaginertia="0.00001 0.00001 0.00001"/>
+          <joint name="rh_r2" axis="-1 0 0" range="0 1.6" armature="0.005" damping="0.7" limited="true"/>
+          <geom mesh="r2" material="gripper_dark" type="mesh"/>
+        </body>
+      </body>
+      
+      <!-- Left Finger Chain -->
+      <body name="rh_p12_rn_l1" pos="0 -0.008 0.048">
+        <inertial mass="0.068" pos="0 -0.034 0.004" diaginertia="0.00004 0.00002 0.00002"/>
+        <joint name="rh_p12_rn_left" axis="-1 0 0" range="0 1.6" armature="0.01" damping="0.7" limited="true"/>
+        <geom mesh="l1" material="gripper_grey" type="mesh"/>
+        
+        <!-- Left Finger Tip -->
+        <body name="rh_p12_rn_l2" pos="0 -0.0493634 0.0285">
+          <inertial mass="0.022" pos="0 -0.006 0.011" diaginertia="0.00001 0.00001 0.00001"/>
+          <joint name="rh_l2" axis="1 0 0" range="0 1.6" armature="0.005" damping="0.7" limited="true"/>
+          <geom mesh="l2" material="gripper_dark" type="mesh"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,16 @@
+<!-- Optical Breadboard Arena -->
+<mujoco>
+  <asset>
+    <!-- Optical breadboard mesh and material -->
+    <mesh name="optical_breadboard" file="../common_arena/OpticalBreadBoard.STL" scale="0.001 0.001 0.001"/>
+    <material name="breadboard_material" rgba="0.8 0.8 0.8 1"/>
+  </asset>
+  
+  <worldbody>
+    <!-- Optical breadboard only - no extra ground plane -->
+    <!-- Moved to negative X direction to align with robot workspace -->
+    <body name="optical_breadboard" pos="0.5 0 0.8" quat="1 0 0 0">
+      <geom name="breadboard_geom" mesh="optical_breadboard" material="breadboard_material" type="mesh" contype="1" conaffinity="1"/>
+    </body>
+  </worldbody>
+</mujoco>

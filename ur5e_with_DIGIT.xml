@@ -1,0 +1,241 @@
+<!-- UR5e with RH-P12-RN Gripper Integration -->
+<mujoco model="ur5e_with_rh_p12_rn">
+    <compiler angle="radian" meshdir="assets/ur5e" inertiagrouprange="0 0"/>
+    <option impratio="20" cone="elliptic" density="1.2" viscosity="0.00002" integrator="implicitfast"/>
+    <size nconmax="5000" njmax="5000"/>
+    
+    <!-- Default settings -->
+    <default>
+        <material specular="0.5" shininess="0.25"/>
+        <joint axis="0 1 0" range="-3.14 3.14" armature="0.1"/>
+        <geom type="mesh" contype="1" conaffinity="1" group="2" solref="0.002 1" solimp="0.95 0.99 0.001"/>
+        <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
+    </default>
+
+    <!-- Collision settings -->
+    <contact>
+        <exclude body1="ur5e_base" body2="shoulder_link"/>
+        <exclude body1="shoulder_link" body2="upper_arm_link"/>
+        <exclude body1="upper_arm_link" body2="forearm_link"/>
+        <exclude body1="forearm_link" body2="wrist_1_link"/>
+        <exclude body1="wrist_1_link" body2="wrist_2_link"/>
+        <exclude body1="wrist_2_link" body2="wrist_3_link"/>
+        <exclude body1="wrist_3_link" body2="rh_p12_rn_base"/>
+        <exclude body1="rh_p12_rn_base" body2="rh_p12_rn_r1"/>
+        <exclude body1="rh_p12_rn_base" body2="rh_p12_rn_l1"/>
+        <exclude body1="rh_p12_rn_r1" body2="rh_p12_rn_r2"/>
+        <exclude body1="rh_p12_rn_l1" body2="rh_p12_rn_l2"/>
+        <!-- DIGIT sensor collision exclusions -->
+        <exclude body1="rh_p12_rn_r2" body2="digit_geltip_right"/>
+        <exclude body1="rh_p12_rn_l2" body2="digit_geltip_left"/>
+    </contact>
+
+    <!-- UR5e assets -->
+    <include file="assets/ur5e/ur5e_assets.xml"/>
+    
+    <!-- RH-P12-RN Gripper assets -->
+    <include file="assets/gripper/rh_p12_rn_assets.xml"/>
+
+    <!-- DIGIT sensor assets -->
+    <asset>
+        <!-- DIGIT sensor materials -->
+        <material name="digit_gel" rgba="0.564 0.835 1 0.7"/>
+        <material name="digit_base" rgba="0.1 0.1 0.1 1"/>
+        
+        <!-- DIGIT GelTip sensor meshes (only right and left) -->
+        <mesh name="digit_geltip_right" file="../../RH-P12-RN/rh_p12_rn_description/meshes/Geltip_right.stl" scale="0.001 0.001 0.001"/>
+        <mesh name="digit_geltip_left" file="../../RH-P12-RN/rh_p12_rn_description/meshes/Geltip_left.stl" scale="0.001 0.001 0.001"/>
+        
+        <!-- Cube mesh -->
+        <mesh name="cube_mesh" file="assets/Objects/Cylinder.stl" scale="0.001 0.001 0.001"/>
+    </asset>
+
+    <!-- Arena -->
+    <include file="assets/common_arena/optical_breadboard.xml"/>
+
+    <!-- Main robot body with gripper -->
+    <worldbody>
+      <!-- UR5e Base -->
+      <body name="ur5e_base" pos="0 0 0.8" quat="0 0 0 -1">
+        <inertial mass="4.0" pos="0 0 0" diaginertia="0.00443333156 0.00443333156 0.0072"/>
+        <geom mesh="base_0" material="black" type="mesh" group="2"/>
+        <geom mesh="base_1" material="jointgray" type="mesh" group="2"/>
+        
+        <!-- Robot base coordinate frame -->
+        <site name="robot_frame" pos="0 0 0" size="0.05" type="sphere" rgba="1 1 0 0.5"/>
+        <geom name="robot_x_axis" type="cylinder" pos="0.03 0 0" size="0.003 0.06" rgba="1 0 0 1" quat="0.707 0 0.707 0"/>
+        <geom name="robot_y_axis" type="cylinder" pos="0 0.03 0" size="0.003 0.06" rgba="0 1 0 1" quat="0.707 0.707 0 0"/>
+        <geom name="robot_z_axis" type="cylinder" pos="0 0 0.03" size="0.003 0.06" rgba="0 0 1 1"/>
+        
+        <!-- Shoulder Link -->
+        <body name="shoulder_link" pos="0 0 0.163">
+          <inertial mass="3.7" pos="0 0 0" diaginertia="0.0102675 0.0102675 0.00666"/>
+          <joint name="shoulder_pan_joint" axis="0 0 1" range="0 6.28319" armature="0.1"/>
+          <geom mesh="shoulder_0" material="urblue" type="mesh" group="2"/>
+          <geom mesh="shoulder_1" material="black" type="mesh" group="2"/>
+          <geom mesh="shoulder_2" material="jointgray" type="mesh" group="2"/>
+          <geom type="capsule" size="0.06 0.06" pos="0 0 -0.04" group="3"/>
+          
+          <!-- Upper Arm Link -->
+          <body name="upper_arm_link" pos="0 0.138 0" quat="1 0 1 0">
+            <inertial mass="8.393" pos="0 0 0.2125" diaginertia="0.133886 0.133886 0.0151074"/>
+            <joint name="shoulder_lift_joint" axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
+            <geom mesh="upperarm_0" material="linkgray" type="mesh" group="2"/>
+            <geom mesh="upperarm_1" material="black" type="mesh" group="2"/>
+            <geom mesh="upperarm_2" material="jointgray" type="mesh" group="2"/>
+            <geom mesh="upperarm_3" material="urblue" type="mesh" group="2"/>
+            <geom type="capsule" pos="0 -0.04 0" quat="1 1 0 0" size="0.06 0.06" group="3"/>
+            <geom type="capsule" size="0.05 0.2" pos="0 0 0.2" group="3"/>
+            
+            <!-- Forearm Link -->
+            <body name="forearm_link" pos="0 -0.131 0.425">
+              <inertial mass="2.275" pos="0 0 0.196" diaginertia="0.0311796 0.0311796 0.004095"/>
+              <joint name="elbow_joint" axis="0 1 0" range="-3.1415 3.1415" armature="0.1"/>
+              <geom mesh="forearm_0" material="urblue" type="mesh" group="2"/>
+              <geom mesh="forearm_1" material="linkgray" type="mesh" group="2"/>
+              <geom mesh="forearm_2" material="black" type="mesh" group="2"/>
+              <geom mesh="forearm_3" material="jointgray" type="mesh" group="2"/>
+              <geom type="capsule" pos="0 0.08 0" quat="1 1 0 0" size="0.055 0.06" group="3"/>
+              <geom type="capsule" size="0.038 0.19" pos="0 0 0.2" group="3"/>
+              
+              <!-- Wrist 1 Link -->
+              <body name="wrist_1_link" pos="0 0 0.392" quat="1 0 1 0">
+                <inertial mass="1.219" pos="0 0.127 0" diaginertia="0.0025599 0.0025599 0.0021942"/>
+                <joint name="wrist_1_joint" axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
+                <geom mesh="wrist1_0" material="black" type="mesh" group="2"/>
+                <geom mesh="wrist1_1" material="urblue" type="mesh" group="2"/>
+                <geom mesh="wrist1_2" material="jointgray" type="mesh" group="2"/>
+                <geom type="capsule" pos="0 0.05 0" quat="1 1 0 0" size="0.04 0.07" group="3"/>
+                
+                <!-- Wrist 2 Link -->
+                <body name="wrist_2_link" pos="0 0.127 0">
+                  <inertial mass="1.219" pos="0 0 0.1" diaginertia="0.0025599 0.0025599 0.0021942"/>
+                  <joint name="wrist_2_joint" axis="0 0 1" range="-6.28319 6.28319" armature="0.1"/>
+                  <geom mesh="wrist2_0" material="black" type="mesh" group="2"/>
+                  <geom mesh="wrist2_1" material="urblue" type="mesh" group="2"/>
+                  <geom mesh="wrist2_2" material="jointgray" type="mesh" group="2"/>
+                  <geom type="capsule" size="0.04 0.06" pos="0 0 0.04" group="3"/>
+                  <geom type="capsule" pos="0 0.02 0.1" quat="1 1 0 0" size="0.04 0.04" group="3"/>
+                  
+                  <!-- Wrist 3 Link -->
+                  <body name="wrist_3_link" pos="0 0 0.1">
+                    <inertial mass="0.1889" pos="0 0.0771683 0" quat="1 0 0 1"
+                      diaginertia="0.000132134 9.90863e-05 9.90863e-05"/>
+                    <joint name="wrist_3_joint" axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
+                    <geom material="linkgray" mesh="wrist3" type="mesh" group="2"/>
+                    <geom type="cylinder" pos="0 0.08 0" quat="1 1 0 0" size="0.04 0.02" group="3"/>
+                    
+                    <!-- RH-P12-RN Gripper attached to end effector with adapter offset -->
+                    <!-- The gripper is at Y=0.1 from wrist_3_link, this is the actual end effector -->
+                    <body name="rh_p12_rn_base" pos="0 0.1 0" quat="0 0 0.707 0.707">
+                      <inertial mass="0.236" pos="0 0 0.032" diaginertia="0.00017 0.00011 0.00017"/>
+                      <geom mesh="base" material="gripper_grey" type="mesh"/>
+                      
+                      <!-- End Effector Site at gripper base -->
+                      <site name="eef_base" pos="0 0 0" size="0.005" rgba="0.5 0.5 0.5 0.5"/>
+                      
+                      <!-- Extended EE Site at grasping center (between fingers, forward in X) -->
+                      <!-- Approximately 80mm forward along X-axis from gripper base -->
+                      <site name="eef_site" pos="0.0 0 0.15" size="0.01" rgba="1 1 0 0.9"/>
+                      <!-- EE marker axes - visual only (group 1, contype/conaffinity 0 for no collision) -->
+                      <geom name="ee_marker_axis_x" type="capsule" fromto="0 0 0.15 0.05 0 0.15" size="0.004" rgba="1 0 0 1" group="1" contype="0" conaffinity="0"/>
+                      <geom name="ee_marker_axis_y" type="capsule" fromto="0 0 0.15 0.0 0.05 0.15" size="0.004" rgba="0 1 0 1" group="1" contype="0" conaffinity="0"/>
+                      <geom name="ee_marker_axis_z" type="capsule" fromto="0 0 0.15 0.0 0 0.2" size="0.004" rgba="0 0 1 1" group="1" contype="0" conaffinity="0"/>
+                      
+                      <!-- Right Finger Chain -->
+                      <body name="rh_p12_rn_r1" pos="0 0.008 0.048">
+                        <inertial mass="0.068" pos="0 0.034 0.004" diaginertia="0.00004 0.00002 0.00002"/>
+                        <joint name="rh_p12_rn_right" axis="1 0 0" range="0 1.1" armature="0.01" damping="0.7"/>
+                        <geom mesh="r1" material="gripper_grey" type="mesh"/>
+                        
+                        <!-- Right Finger Tip -->
+                        <body name="rh_p12_rn_r2" pos="0 0.0493634 0.0285">
+                          <inertial mass="0.022" pos="0 0.006 0.011" diaginertia="0.00001 0.00001 0.00001"/>
+                          <joint name="rh_r2" axis="-1 0 0" range="0 1.0" armature="0.005" damping="0.7"/>
+                          <geom mesh="r2" material="gripper_dark" type="mesh"/>
+                          
+                          <!-- DIGIT GelTip Right Sensor -->
+                          <body name="digit_geltip_right" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0">
+                            <inertial mass="0.01" pos="0 0 0" diaginertia="0.00001 0.00001 0.00001"/>
+                            <geom name="digit_geltip_right_geom" mesh="digit_geltip_right" material="digit_gel" type="mesh" contype="1" conaffinity="1"/>
+                            <!-- Sensor coordinate frame -->
+                            <site name="digit_right_frame" pos="0 0 0" size="0.002" type="sphere" rgba="0.564 0.835 1 0.7"/>
+                            
+                            <!-- Coordinate axes visualization (group 1) -->
+                            <geom name="digit_right_x_axis" type="capsule" fromto="0 0 0 0.01 0 0" size="0.0003" rgba="1 0 0 0.8" group="1" contype="0" conaffinity="0"/>
+                            <geom name="digit_right_y_axis" type="capsule" fromto="0 0 0 0 0.01 0" size="0.0003" rgba="0 1 0 0.8" group="1" contype="0" conaffinity="0"/>
+                            <geom name="digit_right_z_axis" type="capsule" fromto="0 0 0 0 0 0.01" size="0.0003" rgba="0 0 1 0.8" group="1" contype="0" conaffinity="0"/>
+                            
+                            <!-- Sensing plane visualization: 15mm×15mm plane at -4mm along Y (toward left finger) -->
+                            <!-- Surface normal is -Y, so sensing plane is at Y=-4mm from gel origin -->
+                            <!-- ROI positioned at bottom of gel: Z from -7.5mm to +7.5mm (centered at 0) -->
+                            <geom name="digit_right_sensing_plane" type="box" pos="0 -0.004 0.03" size="0.0075 0.0001 0.0075" rgba="1 0 0 1" group="1" contype="0" conaffinity="0"/>
+                            <!-- Sensing plane boundary edges -->
+                           
+                            <!-- Normal direction indicator (yellow arrow pointing -Y) -->
+                            <geom name="digit_right_normal_arrow" type="capsule" fromto="0 0 0 0 -0.008 0" size="0.0005" rgba="1 1 0 0.9" group="1" contype="0" conaffinity="0"/>
+                          </body>
+                        </body>
+                      </body>
+                      
+                      <!-- Left Finger Chain -->
+                      <body name="rh_p12_rn_l1" pos="0 -0.008 0.048">
+                        <inertial mass="0.068" pos="0 -0.034 0.004" diaginertia="0.00004 0.00002 0.00002"/>
+                        <joint name="rh_p12_rn_left" axis="-1 0 0" range="0 1.1" armature="0.01" damping="0.7"/>
+                        <geom mesh="l1" material="gripper_grey" type="mesh"/>
+                        
+                        <!-- Left Finger Tip -->
+                        <body name="rh_p12_rn_l2" pos="0 -0.0493634 0.0285">
+                          <inertial mass="0.022" pos="0 -0.006 0.011" diaginertia="0.00001 0.00001 0.00001"/>
+                          <joint name="rh_l2" axis="1 0 0" range="0 1.0" armature="0.005" damping="0.7"/>
+                          <geom mesh="l2" material="gripper_dark" type="mesh"/>
+                          
+                          <!-- DIGIT GelTip Left Sensor -->
+                          <body name="digit_geltip_left" pos="0.0 -0.0 0.0" quat="1.0 0.0 0.0 0">
+                            <inertial mass="0.01" pos="0 0 0" diaginertia="0.00001 0.00001 0.00001"/>
+                            <geom name="digit_geltip_left_geom" mesh="digit_geltip_left" material="digit_gel" type="mesh" contype="1" conaffinity="1"/>
+                            <!-- Sensor coordinate frame -->
+                            <site name="digit_left_frame" pos="0 0 0" size="0.002" type="sphere" rgba="0.564 0.835 1 0.7"/>
+                            
+                            <!-- Coordinate axes visualization (group 1) -->
+                            <geom name="digit_left_x_axis" type="capsule" fromto="0 0 0 0.01 0 0" size="0.0003" rgba="1 0 0 0.8" group="1" contype="0" conaffinity="0"/>
+                            <geom name="digit_left_y_axis" type="capsule" fromto="0 0 0 0 0.01 0" size="0.0003" rgba="0 1 0 0.8" group="1" contype="0" conaffinity="0"/>
+                            <geom name="digit_left_z_axis" type="capsule" fromto="0 0 0 0 0 0.01" size="0.0003" rgba="0 0 1 0.8" group="1" contype="0" conaffinity="0"/>
+                            
+                            <!-- Sensing plane visualization: 15mm×15mm plane at +4mm along Y (toward right finger) -->
+                            <!-- Surface normal is +Y, so sensing plane is at Y=+4mm from gel origin -->
+                            <!-- ROI positioned at bottom of gel: Z from -7.5mm to +7.5mm (centered at 0) -->
+                            <geom name="digit_left_sensing_plane" type="box" pos="0 0.004 0.03" size="0.0075 0.0001 0.0075" rgba="0 1 1 0.4" group="1" contype="0" conaffinity="0"/>
+                            <!-- Sensing plane boundary edges -->
+                            
+                            <!-- Normal direction indicator (yellow arrow pointing +Y) -->
+                            <geom name="digit_left_normal_arrow" type="capsule" fromto="0 0 0 0 0.008 0" size="0.0005" rgba="1 1 0 0.9" group="1" contype="0" conaffinity="0"/>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      
+      <!-- Free-floating cube object -->
+      <body name="cube_body" pos="0.6 0 0.8">
+        <freejoint/>
+        <inertial mass="0.02" pos="0 0 0" diaginertia="0.0005 0.0005 0.0005"/>
+        <geom name="cube_geom" type="mesh" mesh="cube_mesh" size="0.01" rgba="0.8 0.3 0.2 1" 
+              friction="1.0 0.005 0.0001" contype="1" conaffinity="1"
+              solref="0.001 1" solimp="0.99 0.999 0.0001" margin="0.001"/>
+      </body>
+    </worldbody>
+
+    <!-- UR5e actuators -->
+    <include file="assets/ur5e/ur5e_actuators.xml"/>
+    
+    <!-- RH-P12-RN Gripper actuators -->
+    <include file="assets/gripper/rh_p12_rn_actuators.xml"/>
+
+</mujoco>
