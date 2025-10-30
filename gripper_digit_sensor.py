@@ -64,6 +64,13 @@ class GripperDIGITSensor:
         # Proximity threshold (distance from sensing plane to consider contact)
         self.proximity_threshold = 0.0008  # 0.8mm (same as ModularDIGITSensor)
         
+        # Sensing plane position in sensor local coordinates: [X, Y, Z]
+        self.sensing_plane_pos = np.array([
+            0.0,  # X = 0 (centered)
+            self.sensing_distance * self.sensing_direction,  # Y = ±4mm
+            self.sensing_plane_offset_z  # Z = 30mm
+        ])
+        
         # Extract gel tip mesh vertices for contact detection
         # Need to use the geometry name, not body name
         gel_geom_name = f"{sensor_body_name}_geom"
@@ -98,92 +105,274 @@ class GripperDIGITSensor:
     
     def detect_proximity_contacts(self, data):
         """
-        Detect contacts using gel tip vertices (same principle as ModularDIGITSensor)
+        Detect proximity-based contacts for gripper-mounted DIGIT sensor.
         
-        Args:
-            data: MuJoCo data
-            
-        Returns:
-            List of contact dictionaries with distance_from_plane_mm, intensity, etc.
+        Returns list of contact dictionaries with:
+            - position_sensor_local: 3D position in sensor frame
+            - x_mm, y_mm: 2D ROI coordinates
+            - distance_from_plane_mm: Distance from sensing plane
+            - intensity: Contact intensity (1.0 = touching, 0.0 = far)
         """
-        # Step 1: Check if MuJoCo detected any collision with this sensor
-        has_collision = False
+        # Check for collisions with this sensor's gel tip
+        colliding_geoms = set()
         for i in range(data.ncon):
             contact = data.contact[i]
             geom1 = contact.geom1
             geom2 = contact.geom2
+            
             body1 = self.model.geom_bodyid[geom1]
             body2 = self.model.geom_bodyid[geom2]
             
-            if body1 == self.sensor_body_id or body2 == self.sensor_body_id:
-                has_collision = True
-                break
+            # Check if either geom belongs to this sensor body
+            if body1 == self.sensor_body_id:
+                colliding_geoms.add(geom2)  # Store the OTHER geom
+            elif body2 == self.sensor_body_id:
+                colliding_geoms.add(geom1)  # Store the OTHER geom
         
-        if not has_collision:
+        if not colliding_geoms:
             return []
         
-        # Step 2: Get gel tip vertices in world coordinates
+        # Get sensor pose
+        sensor_pos = data.xpos[self.sensor_body_id]
+        sensor_rot = data.xmat[self.sensor_body_id].reshape(3, 3)
+        
+        contacts = []
+        
+        # For each colliding geometry, extract its vertices
+        for geom_id in colliding_geoms:
+            # Get the mesh/primitive associated with this geom
+            geom_type = self.model.geom_type[geom_id]
+            
+            # Extract vertices based on geometry type
+            object_vertices_world = []
+            
+            if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
+                # Get mesh data
+                dataid = self.model.geom_dataid[geom_id]
+                if dataid >= 0:
+                    mesh_id = dataid
+                    vert_start = self.model.mesh_vertadr[mesh_id]
+                    vert_count = self.model.mesh_vertnum[mesh_id]
+                    
+                    # Get body pose for this geom
+                    body_id = self.model.geom_bodyid[geom_id]
+                    body_pos = data.xpos[body_id]
+                    body_rot = data.xmat[body_id].reshape(3, 3)
+                    
+                    # Get geom local pose
+                    geom_pos = self.model.geom_pos[geom_id]
+                    geom_quat = self.model.geom_quat[geom_id]
+                    geom_rot = np.zeros(9)
+                    mujoco.mju_quat2Mat(geom_rot, geom_quat)
+                    geom_rot = geom_rot.reshape(3, 3)
+                    
+                    # Transform mesh vertices to world frame
+                    for v_idx in range(vert_start, vert_start + vert_count):
+                        vert_local = self.model.mesh_vert[v_idx]
+                        # Local geom frame -> body frame -> world frame
+                        vert_geom = geom_rot @ vert_local + geom_pos
+                        vert_world = body_rot @ vert_geom + body_pos
+                        object_vertices_world.append(vert_world)
+            
+            elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+                # Generate box vertices
+                size = self.model.geom_size[geom_id]
+                body_id = self.model.geom_bodyid[geom_id]
+                body_pos = data.xpos[body_id]
+                body_rot = data.xmat[body_id].reshape(3, 3)
+                
+                geom_pos = self.model.geom_pos[geom_id]
+                geom_quat = self.model.geom_quat[geom_id]
+                geom_rot = np.zeros(9)
+                mujoco.mju_quat2Mat(geom_rot, geom_quat)
+                geom_rot = geom_rot.reshape(3, 3)
+                
+                # 8 corners of box
+                for dx in [-size[0], size[0]]:
+                    for dy in [-size[1], size[1]]:
+                        for dz in [-size[2], size[2]]:
+                            corner_local = np.array([dx, dy, dz])
+                            corner_geom = geom_rot @ corner_local + geom_pos
+                            corner_world = body_rot @ corner_geom + body_pos
+                            object_vertices_world.append(corner_world)
+            
+            # Now check which object vertices are near the sensing plane
+            for vert_world in object_vertices_world:
+                # Transform to sensor local coordinates
+                relative_pos = vert_world - sensor_pos
+                vert_local = sensor_rot.T @ relative_pos
+                
+                # Calculate distance from sensing plane
+                # Sensing plane is at self.sensing_plane_pos in local coords
+                distance_vector = vert_local - self.sensing_plane_pos
+                
+                # Distance along surface normal (Y-axis for gripper sensors)
+                distance_along_normal = np.abs(distance_vector[1])  # Y component
+                
+                # Check if within proximity threshold (0.8mm)
+                if distance_along_normal <= self.proximity_threshold:
+                    # Check if within ROI bounds (X and Z relative to sensing plane)
+                    # X: centered at 0, range [-7.5mm, +7.5mm]
+                    # Z: symmetric around sensing plane, range [-7.5mm, +7.5mm]
+                    x_relative = vert_local[0] - self.sensing_plane_pos[0]  # Relative to center
+                    z_relative = vert_local[2] - self.sensing_plane_pos[2]  # Relative to sensing plane Z
+                    
+                    # ROI bounds: X in [-7.5, +7.5], Z in [-7.5, +7.5] (symmetric)
+                    if (abs(x_relative) <= self.roi_half_width and 
+                        abs(z_relative) <= self.roi_half_height):  # Symmetric around sensing plane
+                        
+                        # Calculate intensity (1.0 = touching, 0.0 = at threshold)
+                        intensity = 1.0 - (distance_along_normal / self.proximity_threshold)
+                        
+                        # Convert to 2D ROI coordinates in mm
+                        x_mm = x_relative * 1000  # [-7.5, +7.5] mm
+                        # Shift Z to [0, 15] range for visualization: z_relative [-7.5, +7.5] -> [0, 15]
+                        z_mm = (z_relative + self.roi_half_height) * 1000  # [0, 15] mm for visualization as Y
+                        
+                        contacts.append({
+                            'position_sensor_local': vert_local,
+                            'x_mm': x_mm,
+                            'y_mm': z_mm,  # Map Z to Y for 2D visualization
+                            'distance_from_plane_mm': distance_along_normal * 1000,
+                            'intensity': intensity
+                        })
+        
+        return contacts
+    
+    def get_geltip_distance_field(self, data):
+        """
+        Generate distance field based on gel tip ROI mesh nodes (fixed resolution).
+        Each gel tip node measures distance to nearest object surface.
+        
+        Returns:
+            list of dicts with:
+                - position_sensor_local: gel tip node position in sensor frame
+                - x_mm, y_mm: 2D ROI coordinates
+                - distance_to_object_mm: distance to nearest object point
+                - intensity: contact intensity (1.0 = touching, 0.0 = far)
+        """
+        # Get gel tip vertices in world frame
         gel_vertices_world = self.gel_tip_extractor.get_world_vertices(data)
         
         if len(gel_vertices_world) == 0:
             return []
         
-        # Step 3: Transform gel vertices to sensor local coordinates
-        sensor_pos, sensor_rot = self.get_sensor_pose(data)
+        # Get sensor pose
+        sensor_pos = data.xpos[self.sensor_body_id]
+        sensor_rot = data.xmat[self.sensor_body_id].reshape(3, 3)
         
-        gel_vertices_local = []
-        for vertex_world in gel_vertices_world:
-            relative_pos = vertex_world - sensor_pos
-            vertex_local = sensor_rot.T @ relative_pos
-            gel_vertices_local.append(vertex_local)
-        gel_vertices_local = np.array(gel_vertices_local)
+        # Check for colliding objects
+        colliding_geoms = set()
+        for i in range(data.ncon):
+            contact = data.contact[i]
+            geom1 = contact.geom1
+            geom2 = contact.geom2
+            
+            body1 = self.model.geom_bodyid[geom1]
+            body2 = self.model.geom_bodyid[geom2]
+            
+            if body1 == self.sensor_body_id:
+                colliding_geoms.add(geom2)
+            elif body2 == self.sensor_body_id:
+                colliding_geoms.add(geom1)
         
-        # Step 4: Calculate distance from each gel vertex to the sensing plane
-        # Sensing plane is at Y = sensing_distance (±4mm depending on sensor type)
-        # Distance along Y-axis (sensing direction)
-        distances_along_normal = gel_vertices_local[:, 1] * self.sensing_direction
-        
-        # Distance from sensing plane (how far gel node is from the ideal sensing plane)
-        distance_from_plane = np.abs(distances_along_normal - self.sensing_distance)
-        
-        # Filter by proximity threshold
-        nearby_mask = distance_from_plane <= self.proximity_threshold
-        
-        # Step 5: Filter by ROI bounds (X and Z)
-        x_positions = gel_vertices_local[:, 0]
-        z_positions = gel_vertices_local[:, 2] - self.sensing_plane_offset_z  # Relative to sensing plane center
-        
-        x_in_roi = (x_positions >= -self.roi_half_width) & (x_positions <= self.roi_half_width)
-        z_in_roi = (z_positions >= -self.roi_half_height) & (z_positions <= self.roi_half_height)
-        roi_mask = x_in_roi & z_in_roi
-        
-        # Combined contact detection
-        contact_mask = nearby_mask & roi_mask
-        
-        if not np.any(contact_mask):
+        if not colliding_geoms:
             return []
         
-        # Step 6: Get contact data for detected gel nodes
-        contact_vertices = gel_vertices_local[contact_mask]
-        contact_distance_from_plane = distance_from_plane[contact_mask]
-        contact_x = x_positions[contact_mask]
-        contact_z = z_positions[contact_mask]
+        # Extract all object vertices
+        object_vertices_world = []
+        for geom_id in colliding_geoms:
+            geom_type = self.model.geom_type[geom_id]
+            
+            if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
+                dataid = self.model.geom_dataid[geom_id]
+                if dataid >= 0:
+                    mesh_id = dataid
+                    vert_start = self.model.mesh_vertadr[mesh_id]
+                    vert_count = self.model.mesh_vertnum[mesh_id]
+                    
+                    body_id = self.model.geom_bodyid[geom_id]
+                    body_pos = data.xpos[body_id]
+                    body_rot = data.xmat[body_id].reshape(3, 3)
+                    
+                    geom_pos = self.model.geom_pos[geom_id]
+                    geom_quat = self.model.geom_quat[geom_id]
+                    geom_rot = np.zeros(9)
+                    mujoco.mju_quat2Mat(geom_rot, geom_quat)
+                    geom_rot = geom_rot.reshape(3, 3)
+                    
+                    for v_idx in range(vert_start, vert_start + vert_count):
+                        vert_local = self.model.mesh_vert[v_idx]
+                        vert_geom = geom_rot @ vert_local + geom_pos
+                        vert_world = body_rot @ vert_geom + body_pos
+                        object_vertices_world.append(vert_world)
+            
+            elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+                size = self.model.geom_size[geom_id]
+                body_id = self.model.geom_bodyid[geom_id]
+                body_pos = data.xpos[body_id]
+                body_rot = data.xmat[body_id].reshape(3, 3)
+                
+                geom_pos = self.model.geom_pos[geom_id]
+                geom_quat = self.model.geom_quat[geom_id]
+                geom_rot = np.zeros(9)
+                mujoco.mju_quat2Mat(geom_rot, geom_quat)
+                geom_rot = geom_rot.reshape(3, 3)
+                
+                for dx in [-size[0], size[0]]:
+                    for dy in [-size[1], size[1]]:
+                        for dz in [-size[2], size[2]]:
+                            corner_local = np.array([dx, dy, dz])
+                            corner_geom = geom_rot @ corner_local + geom_pos
+                            corner_world = body_rot @ corner_geom + body_pos
+                            object_vertices_world.append(corner_world)
         
-        # Calculate proximity weights (1.0 = touching plane, 0.0 = at threshold)
-        proximity_weights = 1.0 - (contact_distance_from_plane / self.proximity_threshold)
+        if len(object_vertices_world) == 0:
+            return []
         
-        # Step 7: Build results (matching ModularDIGITSensor output format)
-        results = []
-        for i in range(len(contact_x)):
-            results.append({
-                'position_sensor_local': contact_vertices[i],
-                'x_mm': contact_x[i] * 1000,  # X position in ROI (mm)
-                'y_mm': contact_z[i] * 1000,  # Z position in ROI (mm) - using Z as "height"
-                'distance_from_plane_mm': contact_distance_from_plane[i] * 1000,  # Distance from sensing plane
-                'intensity': proximity_weights[i]  # Proximity weight
-            })
+        object_vertices_world = np.array(object_vertices_world)
         
-        return results
+        # Now iterate over gel tip vertices and compute distance to nearest object
+        distance_field = []
+        
+        for gel_vert_world in gel_vertices_world:
+            # Transform gel vertex to sensor local frame
+            relative_pos = gel_vert_world - sensor_pos
+            gel_vert_local = sensor_rot.T @ relative_pos
+            
+            # Check if this gel vertex is within the ROI
+            x_relative = gel_vert_local[0] - self.sensing_plane_pos[0]
+            z_relative = gel_vert_local[2] - self.sensing_plane_pos[2]
+            
+            if (abs(x_relative) <= self.roi_half_width and 
+                abs(z_relative) <= self.roi_half_height):
+                
+                # Compute distance to nearest object vertex
+                distances = np.linalg.norm(object_vertices_world - gel_vert_world, axis=1)
+                min_distance = np.min(distances)
+                
+                # Convert to mm
+                min_distance_mm = min_distance * 1000
+                
+                # Compute intensity based on proximity threshold
+                if min_distance_mm <= self.proximity_threshold * 1000:
+                    intensity = 1.0 - (min_distance_mm / (self.proximity_threshold * 1000))
+                else:
+                    intensity = 0.0
+                
+                # 2D ROI coordinates
+                x_mm = x_relative * 1000
+                z_mm = (z_relative + self.roi_half_height) * 1000
+                
+                distance_field.append({
+                    'position_sensor_local': gel_vert_local,
+                    'x_mm': x_mm,
+                    'y_mm': z_mm,
+                    'distance_to_object_mm': min_distance_mm,
+                    'intensity': intensity
+                })
+        
+        return distance_field
 
 
 class UniversalMeshExtractor:

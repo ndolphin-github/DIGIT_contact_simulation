@@ -201,6 +201,97 @@ class ModularDIGITSensor:
         
         return results
     
+    def get_geltip_distance_field(self, data):
+        """
+        Generate distance field based on gel tip ROI mesh nodes (fixed resolution).
+        Each gel tip node measures distance to nearest object surface.
+        This provides object-independent, consistent resolution contact visualization.
+        
+        Args:
+            data: MuJoCo data object
+        
+        Returns:
+            list of dicts with:
+                - position_sensor_local: gel tip node position in sensor frame
+                - x_mm, y_mm: 2D ROI coordinates
+                - distance_to_object_mm: distance to nearest object point
+                - intensity: contact intensity (1.0 = touching, 0.0 = far)
+        """
+        # Get sensor pose
+        sensor_pos = data.xpos[self.sensor_body_id]
+        sensor_rot = data.xmat[self.sensor_body_id].reshape(3, 3)
+        
+        # Get gel tip vertices in world frame
+        gel_vertices_world = self.gel_tip_extractor.get_world_vertices(data)
+        
+        if len(gel_vertices_world) == 0:
+            return []
+        
+        # Get all object vertices in world frame
+        object_vertices_world = []
+        for obj_extractor in self.object_extractors:
+            obj_verts = obj_extractor.get_world_vertices(data)
+            if len(obj_verts) > 0:
+                object_vertices_world.extend(obj_verts)
+        
+        if len(object_vertices_world) == 0:
+            return []
+        
+        object_vertices_world = np.array(object_vertices_world)
+        
+        # Transform gel vertices to sensor local frame
+        relative_pos = gel_vertices_world - sensor_pos
+        sensor_local_vertices = (sensor_rot.T @ relative_pos.T).T
+        
+        # Project onto ROI coordinate system
+        x_coords = np.dot(sensor_local_vertices, self.roi_axis_x)
+        y_coords = np.dot(sensor_local_vertices, self.roi_axis_y)
+        
+        # Filter by ROI boundaries
+        x_in_roi = (x_coords >= -self.roi_width/2) & (x_coords <= self.roi_width/2)
+        y_in_roi = (y_coords >= self.roi_offset_y) & (y_coords <= self.roi_offset_y + self.roi_height)
+        roi_mask = x_in_roi & y_in_roi
+        
+        if not np.any(roi_mask):
+            return []
+        
+        # Get gel nodes within ROI
+        roi_gel_vertices_world = gel_vertices_world[roi_mask]
+        roi_sensor_local = sensor_local_vertices[roi_mask]
+        roi_x = x_coords[roi_mask]
+        roi_y = y_coords[roi_mask]
+        
+        # For each gel tip node, compute distance to nearest object vertex
+        distance_field = []
+        
+        for i in range(len(roi_gel_vertices_world)):
+            gel_vert_world = roi_gel_vertices_world[i]
+            
+            # Compute distance to all object vertices
+            distances = np.linalg.norm(object_vertices_world - gel_vert_world, axis=1)
+            min_distance = np.min(distances)
+            min_distance_mm = min_distance * 1000
+            
+            # Compute intensity based on proximity threshold
+            if min_distance_mm <= self.proximity_threshold * 1000:
+                intensity = 1.0 - (min_distance_mm / (self.proximity_threshold * 1000))
+            else:
+                intensity = 0.0
+            
+            # Only include if there's some proximity
+            if intensity > 0.0 or min_distance_mm <= self.proximity_threshold * 1000 * 2:  # Show up to 2x threshold
+                distance_field.append({
+                    'position_sensor_local': roi_sensor_local[i],
+                    'x_mm': roi_x[i] * 1000,
+                    'y_mm': roi_y[i] * 1000,
+                    'distance_to_object_mm': min_distance_mm,
+                    'intensity': intensity,
+                    'proximity': intensity,  # Alias for compatibility
+                    'distance_from_plane_mm': min_distance_mm  # Alias for compatibility
+                })
+        
+        return distance_field
+    
     def get_continuous_contact_field(self, contacts, fast_mode=True):
         """
         Generate continuous contact field (7509 nodes) from discrete contact points.

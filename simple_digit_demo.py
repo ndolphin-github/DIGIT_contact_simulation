@@ -67,7 +67,7 @@ class MuJoCoControlledDIGITDemo:
     
     <asset>
         <mesh name="digit_geltip" file="DIGIT_GelTip.STL" scale="0.001 0.001 0.001"/>
-        <mesh name="indenter" file="indenters/donut.STL" scale="0.001 0.001 0.001"/>
+        <mesh name="indenter" file="indenters/line.STL" scale="0.001 0.001 0.001"/>
     </asset>
     
     <worldbody>
