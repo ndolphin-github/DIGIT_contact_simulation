@@ -9,7 +9,7 @@ from simple_ik import move_to_target_pose, stabilize_robot, print_joint_state
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-ENABLE_MATPLOTLIB = True  # Set to True to enable matplotlib visualization
+ENABLE_MATPLOTLIB = False  # Set to True to enable matplotlib visualization
 # ============================================================================
 
 class UR5eDIGITDemo:

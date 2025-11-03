@@ -2,7 +2,7 @@
 <!-- HEXAGON HOLE WITH 6 BOX PRIMITIVES (NO DECOMPOSITION) -->
 <mujoco model="ur5e_with_rh_p12_rn">
     <compiler angle="radian" meshdir="assets/ur5e" inertiagrouprange="0 0"/>
-    <option impratio="20" cone="elliptic" density="1.2" viscosity="0.00002" integrator="implicitfast" gravity="0 0 -0.81"/>
+    <option impratio="20" cone="elliptic" density="1.2" viscosity="0.00002" integrator="implicitfast" gravity="0 0 -9.81"/>
     <size nconmax="5000" njmax="5000"/>
     
     <!-- Default settings -->
@@ -48,7 +48,7 @@
         <mesh name="digit_geltip_left" file="../../RH-P12-RN/rh_p12_rn_description/meshes/Geltip_left.stl" scale="0.001 0.001 0.001"/>
         
         <!-- Hexagon peg mesh (same for visual and collision) -->
-        <mesh name="hexagon_peg_mesh" file="assets/Objects/Cube.STL" scale="0.001 0.001 0.001"/>
+        <mesh name="hexagon_peg_mesh" file="assets/Objects/hexagon.STL" scale="0.001 0.001 0.001"/>
         
         <!-- Hexagon hole - VISUAL ONLY (no decomposition meshes) -->
         <mesh name="hole_hexagon_visual_mesh" file="assets/Objects/Hole_hexa.STL" scale="0.001 0.001 0.001"/>
