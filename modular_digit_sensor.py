@@ -201,97 +201,6 @@ class ModularDIGITSensor:
         
         return results
     
-    def get_geltip_distance_field(self, data):
-        """
-        Generate distance field based on gel tip ROI mesh nodes (fixed resolution).
-        Each gel tip node measures distance to nearest object surface.
-        This provides object-independent, consistent resolution contact visualization.
-        
-        Args:
-            data: MuJoCo data object
-        
-        Returns:
-            list of dicts with:
-                - position_sensor_local: gel tip node position in sensor frame
-                - x_mm, y_mm: 2D ROI coordinates
-                - distance_to_object_mm: distance to nearest object point
-                - intensity: contact intensity (1.0 = touching, 0.0 = far)
-        """
-        # Get sensor pose
-        sensor_pos = data.xpos[self.sensor_body_id]
-        sensor_rot = data.xmat[self.sensor_body_id].reshape(3, 3)
-        
-        # Get gel tip vertices in world frame
-        gel_vertices_world = self.gel_tip_extractor.get_world_vertices(data)
-        
-        if len(gel_vertices_world) == 0:
-            return []
-        
-        # Get all object vertices in world frame
-        object_vertices_world = []
-        for obj_extractor in self.object_extractors:
-            obj_verts = obj_extractor.get_world_vertices(data)
-            if len(obj_verts) > 0:
-                object_vertices_world.extend(obj_verts)
-        
-        if len(object_vertices_world) == 0:
-            return []
-        
-        object_vertices_world = np.array(object_vertices_world)
-        
-        # Transform gel vertices to sensor local frame
-        relative_pos = gel_vertices_world - sensor_pos
-        sensor_local_vertices = (sensor_rot.T @ relative_pos.T).T
-        
-        # Project onto ROI coordinate system
-        x_coords = np.dot(sensor_local_vertices, self.roi_axis_x)
-        y_coords = np.dot(sensor_local_vertices, self.roi_axis_y)
-        
-        # Filter by ROI boundaries
-        x_in_roi = (x_coords >= -self.roi_width/2) & (x_coords <= self.roi_width/2)
-        y_in_roi = (y_coords >= self.roi_offset_y) & (y_coords <= self.roi_offset_y + self.roi_height)
-        roi_mask = x_in_roi & y_in_roi
-        
-        if not np.any(roi_mask):
-            return []
-        
-        # Get gel nodes within ROI
-        roi_gel_vertices_world = gel_vertices_world[roi_mask]
-        roi_sensor_local = sensor_local_vertices[roi_mask]
-        roi_x = x_coords[roi_mask]
-        roi_y = y_coords[roi_mask]
-        
-        # For each gel tip node, compute distance to nearest object vertex
-        distance_field = []
-        
-        for i in range(len(roi_gel_vertices_world)):
-            gel_vert_world = roi_gel_vertices_world[i]
-            
-            # Compute distance to all object vertices
-            distances = np.linalg.norm(object_vertices_world - gel_vert_world, axis=1)
-            min_distance = np.min(distances)
-            min_distance_mm = min_distance * 1000
-            
-            # Compute intensity based on proximity threshold
-            if min_distance_mm <= self.proximity_threshold * 1000:
-                intensity = 1.0 - (min_distance_mm / (self.proximity_threshold * 1000))
-            else:
-                intensity = 0.0
-            
-            # Only include if there's some proximity
-            if intensity > 0.0 or min_distance_mm <= self.proximity_threshold * 1000 * 2:  # Show up to 2x threshold
-                distance_field.append({
-                    'position_sensor_local': roi_sensor_local[i],
-                    'x_mm': roi_x[i] * 1000,
-                    'y_mm': roi_y[i] * 1000,
-                    'distance_to_object_mm': min_distance_mm,
-                    'intensity': intensity,
-                    'proximity': intensity,  # Alias for compatibility
-                    'distance_from_plane_mm': min_distance_mm  # Alias for compatibility
-                })
-        
-        return distance_field
-    
     def get_continuous_contact_field(self, contacts, fast_mode=True):
         """
         Generate continuous contact field (7509 nodes) from discrete contact points.
@@ -398,6 +307,106 @@ class ModularDIGITSensor:
             'contact_area_coverage': float(coverage),
             'avg_intensity': float(np.mean(intensities))
         }
+    
+    def load_fem_grid(self, csv_path='filtered_FEM_grid.csv'):
+        """
+        Load FEM grid from CSV file for high-resolution visualization.
+        
+        Args:
+            csv_path: Path to the FEM grid CSV file
+            
+        Returns:
+            pandas DataFrame with 'x' and 'y' columns, or None if file not found
+        """
+        try:
+            import pandas as pd
+            fem_grid = pd.read_csv(csv_path)
+            print(f"✓ Loaded FEM grid: {len(fem_grid)} nodes")
+            print(f"  X range: [{fem_grid['x'].min():.3f}, {fem_grid['x'].max():.3f}] mm")
+            print(f"  Y range: [{fem_grid['y'].min():.3f}, {fem_grid['y'].max():.3f}] mm")
+            return fem_grid
+        except FileNotFoundError:
+            print(f"⚠️  Warning: {csv_path} not found. High-res visualization disabled.")
+            return None
+        except ImportError:
+            print(f"⚠️  Warning: pandas not available. Install with: pip install pandas")
+            return None
+    
+    def interpolate_to_fem_grid(self, contacts, fem_grid, influence_radius_mm=0.2):
+        """
+        Interpolate sparse contact data to fine FEM grid using Gaussian kernel.
+        Only nodes near contacts will have non-zero values (creates sparse heatmap).
+        Uses adaptive weighting to preserve sharp edges and non-convex features.
+        
+        Args:
+            contacts: List of contact dictionaries from detect_proximity_contacts()
+            fem_grid: pandas DataFrame with 'x' and 'y' columns (FEM grid positions)
+            influence_radius_mm: Smoothness parameter (default 0.2mm for tight boundaries)
+        
+        Returns:
+            numpy array of distance values at each FEM grid node (length = len(fem_grid))
+            Values are 0.0 for nodes far from any contact (creating transparency effect)
+        """
+        if fem_grid is None or len(contacts) == 0:
+            return np.zeros(len(fem_grid)) if fem_grid is not None else np.array([])
+        
+        # Extract contact positions and distance values (sparse data)
+        contact_positions = np.array([[c['x_mm'], c['y_mm']] for c in contacts])
+        contact_distances = np.array([c['distance_from_plane_mm'] for c in contacts])
+        
+        # FEM grid positions (dense target grid)
+        fem_positions = fem_grid[['x', 'y']].values
+        
+        # Compute pairwise distances: (n_fem_nodes, n_contacts)
+        distances = np.linalg.norm(
+            fem_positions[:, np.newaxis, :] - contact_positions[np.newaxis, :, :],
+            axis=2
+        )
+        
+        # Find nearest contact for each FEM node (for edge detection)
+        nearest_contact_dist = np.min(distances, axis=1)
+        
+        # Adaptive influence radius based on local contact density
+        # In dense regions (many nearby contacts), use smaller radius for sharper edges
+        # In sparse regions, use larger radius for smoother interpolation
+        
+        # Count contacts within 2x influence radius for each FEM node
+        contact_density = np.sum(distances < (2 * influence_radius_mm), axis=1)
+        
+        # Adaptive radius: smaller in dense regions, larger in sparse regions
+        # This preserves sharp features in high-density areas (like donut edges)
+        adaptive_radius = influence_radius_mm * np.where(
+            contact_density > 5,  # Dense region threshold
+            0.7,  # Tighter radius in dense regions (sharper edges)
+            1.0   # Normal radius in sparse regions
+        )[:, np.newaxis]
+        
+        # Gaussian weighting with adaptive radius
+        influences = np.exp(-(distances / adaptive_radius) ** 2)
+        
+        # Edge preservation: reduce influence of far contacts
+        # This prevents bleeding across gaps (like donut holes)
+        edge_threshold = 0.5 * influence_radius_mm  # 0.1mm for sharp edges
+        edge_mask = distances < (3 * influence_radius_mm)  # Only consider nearby contacts
+        influences = influences * edge_mask
+        
+        # Weighted average for distance field
+        weighted_distances = influences * contact_distances[np.newaxis, :]
+        total_weights = np.sum(influences, axis=1)
+        
+        # Only interpolate where weights are significant
+        fem_distance_field = np.zeros(len(fem_positions))
+        weight_threshold = 1e-3  # Nodes with weight below this stay at 0 (transparent)
+        mask = total_weights > weight_threshold
+        fem_distance_field[mask] = np.sum(weighted_distances[mask], axis=1) / total_weights[mask]
+        
+        # Additional refinement: detect and preserve boundaries
+        # Zero out nodes that are too far from any contact (prevents false positives)
+        max_distance_threshold = 1.5 * influence_radius_mm  # 0.3mm max distance
+        fem_distance_field[nearest_contact_dist > max_distance_threshold] = 0.0
+        
+        return fem_distance_field
+
 class UniversalMeshExtractor:
     """Extract mesh vertices from any object for sensor interaction"""
     
