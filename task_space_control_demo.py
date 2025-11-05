@@ -1,86 +1,104 @@
+"""
+Task Space Control Demo - Simple Keyboard Control
+Command EEF pose (x, y, z, roll, pitch, yaw) via keyboard → IK → Visualize
+"""
+
 import numpy as np
 import mujoco
 import mujoco.viewer
 import time
-import tkinter as tk
-from tkinter import ttk
-import threading
-from simple_ik import TaskSpaceController, stabilize_robot
+import msvcrt
 
-# ============================================================================
-# CONTROL CONFIGURATION
-# ============================================================================
-# Control resolution (slider precision)
-POSITION_RESOLUTION = 0.0001  # 0.1mm steps for fine control
-ORIENTATION_RESOLUTION = 0.001  # 0.001 rad steps (~0.06 degrees)
-GRIPPER_RESOLUTION = 0.001  # 0.001 rad steps
+from simple_ik_legacy import move_to_target_pose, DEFAULT_INITIAL_JOINTS
 
-# Control ranges (for sliders) - workspace limits
-X_RANGE = (0.4, 0.8)  # X: 0.4 to 0.8m (400-800mm)
-Y_RANGE = (-0.4, 0.4)  # Y: -0.4 to 0.4m (±400mm)
-Z_RANGE = (0.5, 1.0)  # Z: 0.5 to 1.0m (500-1000mm, always positive)
-ORIENTATION_RANGE = np.pi  # ±180 degrees
-GRIPPER_RANGE = (0.0, 1.3)  # 0 to 1.3 rad (matches controller actuation range)
 
-# ============================================================================
-
-class ControlGUI:
-    """GUI with sliders for 7-DOF control"""
+class TaskSpaceController:
+    """Simple task space controller - keyboard → target pose → IK → visualize"""
     
-    def __init__(self, initial_pos, initial_quat, initial_gripper):
-        """Initialize GUI window with sliders"""
+    def __init__(self, xml_path="ur5e_with_DIGIT_primitive_hexagon.xml"):
+        """Initialize controller"""
+        self.model = mujoco.MjModel.from_xml_path(xml_path)
+        self.data = mujoco.MjData(self.model)
         
-        self.root = tk.Tk()
-        self.root.title("7-DOF Task Space Controller")
-        self.root.geometry("500x600")
+        # Get IDs
+        self.ee_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "eef_site")
         
-        # Convert initial quaternion to euler angles for display
-        self.initial_pos = initial_pos.copy()
-        self.initial_euler = self._quat_to_euler(initial_quat)
-        self.initial_gripper = initial_gripper
+        # Get peg body ID
+        try:
+            self.peg_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "hexagon_peg_body")
+            self.has_peg = True
+        except:
+            self.has_peg = False
+            print("⚠️ Peg not found in model")
         
-        # Target values (will be read by controller)
-        self.target_pos = initial_pos.copy()
-        self.target_euler = self.initial_euler.copy()
-        self.target_gripper = initial_gripper
+        # Get arm joint IDs
+        joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+                      "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
+        self.joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in joint_names]
         
-        # Flag to prevent status updates during widget creation
-        self._widgets_ready = False
+        # Get actuator IDs
+        actuator_names = ["shoulder_pan_actuator", "shoulder_lift_actuator", "elbow_actuator",
+                         "wrist_1_actuator", "wrist_2_actuator", "wrist_3_actuator"]
+        self.actuator_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, n) for n in actuator_names]
         
-        # Create GUI
-        self._create_widgets()
+        # Get gripper actuator IDs
+        try:
+            gripper_names = ["rh_p12_rn_right_actuator", "rh_p12_rn_left_actuator"]
+            self.gripper_actuator_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, n) 
+                                         for n in gripper_names]
+            self.has_gripper = True
+            print(f"   Gripper actuator IDs: {self.gripper_actuator_ids}")
+        except:
+            self.has_gripper = False
+            self.gripper_actuator_ids = []
         
-        # Now widgets are ready, update initial status
-        self._widgets_ready = True
-        self._update_status()
+        # Movement step size (더 작게 = 더 부드럽게)
+        self.pos_step = 0.001  # 0.2mm (더 작은 스텝)
+        self.rot_step = np.deg2rad(0.5)  # 0.5도
         
-        # Flag to check if GUI is running
-        self.running = True
+        # Current target pose - will be set after stabilization
+        self.target_pos = None
+        self.target_rpy = None
         
-    def _quat_to_euler(self, quat):
-        """Convert quaternion to euler angles (roll, pitch, yaw)"""
-        w, x, y, z = quat
+        # Gripper state
+        self.gripper_value = 0.0
+        self.gripper_step = 0.05
         
-        # Roll (x-axis rotation)
-        sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x * x + y * y)
-        roll = np.arctan2(sinr_cosp, cosr_cosp)
+        # CRITICAL: Cache last successful joint configuration to avoid IK oscillation
+        self.last_joint_config = None
         
-        # Pitch (y-axis rotation)
-        sinp = 2 * (w * y - z * x)
-        pitch = np.arcsin(np.clip(sinp, -1, 1))
-        
-        # Yaw (z-axis rotation)
-        siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
-        
-        return np.array([roll, pitch, yaw])
+        print("✅ Task Space Controller initialized")
+        print(f"   Position step: {self.pos_step*1000:.2f}mm")
+        print(f"   Rotation step: {np.rad2deg(self.rot_step):.2f}°")
+        print(f"   Gripper range: 0.0 to 1.6, step: {self.gripper_step}")
     
-    def _euler_to_quat(self, euler):
-        """Convert euler angles to quaternion"""
-        roll, pitch, yaw = euler
+    def set_initial_pose(self):
+        """Set robot to initial joint configuration"""
+        # First, set peg to known safe position BEFORE moving robot
+        if self.has_peg:
+            peg_qpos_addr = self.model.body_jntadr[self.peg_body_id]
+            # Position: X=0.4, Y=0.2, Z=0.81 (AWAY from robot, on table surface)
+            self.data.qpos[peg_qpos_addr:peg_qpos_addr+3] = [0.4, 0.2, 0.81]
+            # Orientation: identity quaternion [w, x, y, z]
+            self.data.qpos[peg_qpos_addr+3:peg_qpos_addr+7] = [1, 0, 0, 0]
+            # Zero velocity
+            peg_qvel_addr = self.model.body_dofadr[self.peg_body_id]
+            self.data.qvel[peg_qvel_addr:peg_qvel_addr+6] = 0.0
         
+        # Now set robot joints
+        for i, jid in enumerate(self.joint_ids):
+            self.data.qpos[jid] = DEFAULT_INITIAL_JOINTS[i]
+            self.data.ctrl[self.actuator_ids[i]] = DEFAULT_INITIAL_JOINTS[i]
+            self.data.qvel[jid] = 0.0  # Zero velocity
+        
+        if self.has_gripper:
+            for grip_id in self.gripper_actuator_ids:
+                self.data.ctrl[grip_id] = 0.0
+        
+        mujoco.mj_forward(self.model, self.data)
+    
+    def rpy_to_quat(self, roll, pitch, yaw):
+        """Convert roll-pitch-yaw to quaternion [w, x, y, z]"""
         cy = np.cos(yaw * 0.5)
         sy = np.sin(yaw * 0.5)
         cp = np.cos(pitch * 0.5)
@@ -95,367 +113,327 @@ class ControlGUI:
         
         return np.array([w, x, y, z])
     
-    def _create_widgets(self):
-        """Create all GUI widgets"""
+    def move_to_target(self):
+        """Move to current target pose - IK on SEPARATE data to preserve contacts!"""
+        # Convert RPY to quaternion
+        target_quat = self.rpy_to_quat(self.target_rpy[0], self.target_rpy[1], self.target_rpy[2])
         
-        # Title
-        title = tk.Label(self.root, text="7-DOF Task Space Control", 
-                        font=("Arial", 16, "bold"))
-        title.pack(pady=10)
+        # CRITICAL: Use cached joint config if available (prevents IK oscillation)
+        if self.last_joint_config is not None:
+            current_joints = self.last_joint_config.copy()
+        else:
+            # First time: get from actuators
+            current_joints = np.array([self.data.ctrl[aid] for aid in self.actuator_ids])
         
-        # Main frame
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        # **CREATE SEPARATE MjData FOR IK CALCULATION!**
+        # This way IK doesn't touch the real simulation state at all!
+        ik_data = mujoco.MjData(self.model)
         
-        # Position sliders
-        pos_frame = ttk.LabelFrame(main_frame, text="Position (m)", padding=10)
-        pos_frame.pack(fill=tk.X, pady=5)
+        # Copy only joint positions for IK
+        for j, jid in enumerate(self.joint_ids):
+            ik_data.qpos[jid] = current_joints[j]
+        mujoco.mj_forward(self.model, ik_data)
         
-        self.pos_sliders = {}
-        self.pos_labels = {}
+        # Run IK on the SEPARATE data
+        success, error = move_to_target_pose(
+            self.model, ik_data, self.target_pos, target_quat,
+            max_iterations=500,
+            lambda_init=0.01,
+            pos_tolerance=0.0001,
+            ori_tolerance=0.0001,
+            initial_joints=current_joints
+        )
         
-        # Define range for each axis
-        pos_ranges = [X_RANGE, Y_RANGE, Z_RANGE]
+        if not success and error > 0.010:
+            return False
         
-        for i, axis in enumerate(['X', 'Y', 'Z']):
-            frame = ttk.Frame(pos_frame)
-            frame.pack(fill=tk.X, pady=2)
+        # Get target joints from IK solution (from SEPARATE data!)
+        target_joints = np.array([ik_data.qpos[jid] for jid in self.joint_ids])
+        
+        # Original simulation data is COMPLETELY UNTOUCHED!
+        # Peg position, contacts, everything preserved!
+        
+        # Calculate joint differences
+        joint_diff = target_joints - current_joints
+        max_diff = np.max(np.abs(joint_diff))
+        
+        if max_diff < 1e-6:
+            return True  # Already at target
+        
+        # LIMIT maximum joint change per step to prevent large jumps
+        MAX_JOINT_CHANGE = np.deg2rad(2.0)  # 2도로 줄임 (더 부드럽게)
+        if max_diff > MAX_JOINT_CHANGE:
+            # Scale down the joint change
+            scale = MAX_JOINT_CHANGE / max_diff
+            target_joints = current_joints + scale * joint_diff
+            joint_diff = target_joints - current_joints
+            max_diff = MAX_JOINT_CHANGE
+        
+        # 더 많은 interpolation steps = 더 부드러운 움직임 (V2는 500-1000!)
+        num_steps = max(100, int(max_diff * 500))  # 훨씬 더 많은 스텝
+        num_steps = min(num_steps, 500)  # Cap을 500으로 증가 (V2 스타일)
+        
+        # Track peg position before movement
+        peg_held_before = False
+        if self.has_peg:
+            ee_pos_before = self.data.site_xpos[self.ee_site_id].copy()
+            peg_pos_before = self.data.xpos[self.peg_body_id].copy()
+            dist_before = np.linalg.norm(peg_pos_before - ee_pos_before)
+            peg_held_before = dist_before < 0.050
+        
+        for step in range(num_steps):
+            # Sinusoidal easing for smooth motion
+            t = (step + 1) / num_steps
+            alpha = (1 - np.cos(t * np.pi)) / 2  # Smooth S-curve
             
-            label = ttk.Label(frame, text=f"{axis}:", width=3)
-            label.pack(side=tk.LEFT)
+            interp_joints = current_joints + alpha * joint_diff
             
-            value_label = ttk.Label(frame, text=f"{self.initial_pos[i]:.4f}", width=10)
-            value_label.pack(side=tk.RIGHT)
-            self.pos_labels[axis] = value_label
+            # GUI SLIDER METHOD: Set actuator CTRL, not qpos!
+            # Let the actuators move the robot naturally (like GUI)
+            for j, aid in enumerate(self.actuator_ids):
+                self.data.ctrl[aid] = interp_joints[j]
             
-            # Clamp initial position to valid range
-            range_min, range_max = pos_ranges[i]
-            clamped_initial = np.clip(self.initial_pos[i], range_min, range_max)
+            # MAINTAIN GRIPPER POSITION
+            if self.has_gripper:
+                for grip_id in self.gripper_actuator_ids:
+                    self.data.ctrl[grip_id] = self.gripper_value
             
-            slider = tk.Scale(frame, from_=range_min, to=range_max,
-                            orient=tk.HORIZONTAL,
-                            resolution=POSITION_RESOLUTION,
-                            length=300,
-                            command=lambda v, ax=axis, idx=i: self._update_position(ax, idx, v))
-            slider.set(clamped_initial)
-            slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-            self.pos_sliders[axis] = slider
-        
-        # Orientation sliders (Euler angles)
-        ori_frame = ttk.LabelFrame(main_frame, text="Orientation (rad)", padding=10)
-        ori_frame.pack(fill=tk.X, pady=5)
-        
-        self.ori_sliders = {}
-        self.ori_labels = {}
-        for i, axis in enumerate(['Roll', 'Pitch', 'Yaw']):
-            frame = ttk.Frame(ori_frame)
-            frame.pack(fill=tk.X, pady=2)
+            # Multiple physics steps - actuators drive the motion
+            for _ in range(5):  # More steps for actuator-based control
+                mujoco.mj_step(self.model, self.data)
             
-            label = ttk.Label(frame, text=f"{axis}:", width=6)
-            label.pack(side=tk.LEFT)
-            
-            value_label = ttk.Label(frame, text=f"{self.initial_euler[i]:.3f}", width=10)
-            value_label.pack(side=tk.RIGHT)
-            self.ori_labels[axis] = value_label
-            
-            slider = tk.Scale(frame, from_=-ORIENTATION_RANGE, 
-                            to=ORIENTATION_RANGE,
-                            orient=tk.HORIZONTAL,
-                            resolution=ORIENTATION_RESOLUTION,
-                            length=300,
-                            command=lambda v, ax=axis, idx=i: self._update_orientation(ax, idx, v))
-            slider.set(self.initial_euler[i])
-            slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-            self.ori_sliders[axis] = slider
+            # Forward kinematics to update state
+            mujoco.mj_forward(self.model, self.data)
         
-        # Gripper slider
-        grip_frame = ttk.LabelFrame(main_frame, text="Gripper", padding=10)
-        grip_frame.pack(fill=tk.X, pady=5)
+        # Check if peg was dropped during movement
+        if self.has_peg and peg_held_before:
+            ee_pos_after = self.data.site_xpos[self.ee_site_id].copy()
+            peg_pos_after = self.data.xpos[self.peg_body_id].copy()
+            dist_after = np.linalg.norm(peg_pos_after - ee_pos_after)
+            if dist_after > 0.050:
+                print(f"⚠️  PEG DROPPED! Distance: {dist_before*1000:.1f}mm → {dist_after*1000:.1f}mm")
         
-        grip_inner = ttk.Frame(grip_frame)
-        grip_inner.pack(fill=tk.X, pady=2)
+        # CACHE final joint configuration for next iteration (prevents oscillation)
+        self.last_joint_config = target_joints.copy()
         
-        grip_label = ttk.Label(grip_inner, text="Angle:", width=6)
-        grip_label.pack(side=tk.LEFT)
+        # AFTER interpolation, sync actuators to final position
+        for j, aid in enumerate(self.actuator_ids):
+            self.data.ctrl[aid] = target_joints[j]
         
-        # Clamp initial gripper to valid range
-        clamped_gripper = np.clip(self.initial_gripper, GRIPPER_RANGE[0], GRIPPER_RANGE[1])
-        
-        self.grip_value_label = ttk.Label(grip_inner, 
-                                         text=f"{clamped_gripper:.3f}rad", 
-                                         width=10)
-        self.grip_value_label.pack(side=tk.RIGHT)
-        
-        self.grip_slider = tk.Scale(grip_inner, from_=GRIPPER_RANGE[0], 
-                                    to=GRIPPER_RANGE[1],
-                                    orient=tk.HORIZONTAL,
-                                    resolution=GRIPPER_RESOLUTION,
-                                    length=300,
-                                    command=self._update_gripper)
-        self.grip_slider.set(clamped_gripper)
-        self.grip_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        reset_btn = ttk.Button(button_frame, text="Reset to Home", 
-                              command=self._reset_to_home)
-        reset_btn.pack(side=tk.LEFT, padx=5)
-        
-        current_btn = ttk.Button(button_frame, text="Use Current Pose", 
-                                command=self._use_current)
-        current_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Status display
-        status_frame = ttk.LabelFrame(main_frame, text="Status", padding=10)
-        status_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        self.status_text = tk.Text(status_frame, height=8, width=50, 
-                                   font=("Courier", 9))
-        self.status_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Initial status
-        self._update_status()
+        return True
     
-    def _update_position(self, axis, idx, value):
-        """Update position target from slider"""
-        self.target_pos[idx] = float(value)
-        self.pos_labels[axis].config(text=f"{self.target_pos[idx]:.4f}")
-        if self._widgets_ready:
-            self._update_status()
-    
-    def _update_orientation(self, axis, idx, value):
-        """Update orientation target from slider"""
-        self.target_euler[idx] = float(value)
-        self.ori_labels[axis].config(text=f"{self.target_euler[idx]:.3f}")
-        if self._widgets_ready:
-            self._update_status()
-    
-    def _update_gripper(self, value):
-        """Update gripper target from slider"""
-        self.target_gripper = float(value)
-        self.grip_value_label.config(text=f"{self.target_gripper:.3f}rad")
-        if self._widgets_ready:
-            self._update_status()
-    
-    def _update_status(self):
-        """Update status display"""
-        quat = self._euler_to_quat(self.target_euler)
+    def print_status(self):
+        """Print current target pose with peg tracking"""
+        ee_pos = self.data.site_xpos[self.ee_site_id]
         
-        status = f"Target Position:\n"
-        status += f"  X: {self.target_pos[0]:7.4f} m ({self.target_pos[0]*1000:.1f} mm)\n"
-        status += f"  Y: {self.target_pos[1]:7.4f} m ({self.target_pos[1]*1000:.1f} mm)\n"
-        status += f"  Z: {self.target_pos[2]:7.4f} m ({self.target_pos[2]*1000:.1f} mm)\n\n"
-        status += f"Target Orientation:\n"
-        status += f"  Roll:  {self.target_euler[0]:7.4f} rad ({np.degrees(self.target_euler[0]):6.2f}°)\n"
-        status += f"  Pitch: {self.target_euler[1]:7.4f} rad ({np.degrees(self.target_euler[1]):6.2f}°)\n"
-        status += f"  Yaw:   {self.target_euler[2]:7.4f} rad ({np.degrees(self.target_euler[2]):6.2f}°)\n\n"
-        status += f"Gripper: {self.target_gripper:.3f} rad"
+        print(f"\n📊 Target Pose:")
+        print(f"   Position: X={self.target_pos[0]:.4f} Y={self.target_pos[1]:.4f} Z={self.target_pos[2]:.4f}")
+        print(f"   EE Actual: X={ee_pos[0]:.4f} Y={ee_pos[1]:.4f} Z={ee_pos[2]:.4f}")
+        print(f"   Rotation: R={np.rad2deg(self.target_rpy[0]):.1f}° P={np.rad2deg(self.target_rpy[1]):.1f}° Y={np.rad2deg(self.target_rpy[2]):.1f}°")
+        print(f"   Gripper: {self.gripper_value:.1f}")
         
-        self.status_text.delete(1.0, tk.END)
-        self.status_text.insert(1.0, status)
+        # Print peg position and grasp status
+        if self.has_peg:
+            peg_pos = self.data.xpos[self.peg_body_id]
+            peg_ee_dist = np.linalg.norm(peg_pos - ee_pos)
+            grasp_status = "HELD" if peg_ee_dist < 0.050 else "DROPPED"
+            print(f"   Peg Position: X={peg_pos[0]:.4f} Y={peg_pos[1]:.4f} Z={peg_pos[2]:.4f}")
+            print(f"   Peg-EE Distance: {peg_ee_dist*1000:.1f}mm [{grasp_status}]")
     
-    def _reset_to_home(self):
-        """Reset all sliders to initial values"""
-        for i, axis in enumerate(['X', 'Y', 'Z']):
-            self.pos_sliders[axis].set(self.initial_pos[i])
-        for i, axis in enumerate(['Roll', 'Pitch', 'Yaw']):
-            self.ori_sliders[axis].set(self.initial_euler[i])
-        self.grip_slider.set(self.initial_gripper)
-    
-    def _use_current(self):
-        """This will be set by external controller"""
-        pass  # Placeholder for external callback
-    
-    def get_target_pose(self):
-        """Get current target from GUI"""
-        quat = self._euler_to_quat(self.target_euler)
-        return self.target_pos.copy(), quat, self.target_gripper
-    
-    def update_current_pose(self, pos, quat, gripper):
-        """Update display with current robot pose (optional)"""
-        # Could add current pose display if needed
-        pass
-    
-    def run(self):
-        """Start GUI main loop (must be called from main thread)"""
-        self.running = True
-        self.root.mainloop()
-        self.running = False  # Set to False when GUI closes
-
-
-class PegInHoleTaskController:
-    """Interactive 7-DOF controller for peg-in-hole task"""
-    
-    def __init__(self, xml_path="ur5e_with_DIGIT_primitive_hexagon.xml"):
-        """Initialize the controller and scene"""
+    def run_manual_control(self):
+        """Continuous key press control: hold keys → update target → IK → visualize"""
+        self.set_initial_pose()
         
-        print("🚀 Loading peg-in-hole scene...")
-        self.model = mujoco.MjModel.from_xml_path(xml_path)
-        self.data = mujoco.MjData(self.model)
+        # Stabilize physics simulation BEFORE any movement
+        print("Stabilizing physics simulation...")
+        for _ in range(200):
+            mujoco.mj_step(self.model, self.data)
+        print("✓ Physics stabilized")
         
-        # Set robot to default initial joint configuration
-        from simple_ik import DEFAULT_INITIAL_JOINTS
-        joint_names = [
-            "shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
-            "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"
-        ]
-        for i, name in enumerate(joint_names):
-            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
-            self.data.qpos[joint_id] = DEFAULT_INITIAL_JOINTS[i]
-        
-        # Initialize simulation
+        # NOW set target to current EE position (don't move yet)
         mujoco.mj_forward(self.model, self.data)
         
-        # Create task space controller
-        print("\n🎮 Initializing 7-DOF Task Space Controller...")
-        self.controller = TaskSpaceController(self.model, self.data)
-
-        # Initialize GUI with current robot pose (so sliders start at current state)
-        try:
-            state = self.controller.get_current_task_space_state()
-            init_pos = state['position']
-            init_quat = state['quaternion']
-            init_gripper_angle = state['gripper_angle']
-        except Exception:
-            # Fallback defaults if state query fails
-            init_pos = np.array([0.5, 0.0, 0.85])
-            init_quat = np.array([0.0, 1.0, 0.0, 0.0])
-            init_gripper_angle = 0.3
-
-        # Create GUI instance (ControlGUI defined above)
-        self.gui = ControlGUI(init_pos, init_quat, init_gripper_angle)
-        
-        # Get peg body ID for monitoring
-        try:
-            self.peg_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "hexagon_peg_body")
-            self.has_peg = True
-        except:
-            print("⚠️  Warning: Hexagon peg not found in scene")
-            self.has_peg = False
-        
-        # Control state
-        self.running = True
-        self.last_status_print = time.time()
-        self.status_print_interval = 2.0  # Print status every 2 seconds
-        
-
-    
-
-    def reset_to_home(self):
-        """Reset robot to home position above peg"""
-        print("\n🏠 Resetting to home position...")
-        
+        # Get peg position and set EE target 50mm above it
         if self.has_peg:
-            # Get peg position
             peg_pos = self.data.xpos[self.peg_body_id].copy()
-            
-            # Target: 8cm above peg, gripper pointing down
-            home_pos = peg_pos.copy()
-            home_pos[2] += 0.08  # 8cm above peg
-            home_quat = np.array([0.0, 1.0, 0.0, 0.0])  # Gripper pointing down
-            gripper_angle = 0.3  # Partially open
-            
-            print(f"  Target position: {home_pos}")
-            print(f"  Peg position: {peg_pos}")
+            self.target_pos = peg_pos + np.array([0.0, 0.0, 0.03])  # 50mm above peg
+            print(f"✓ Peg at: [{peg_pos[0]:.4f}, {peg_pos[1]:.4f}, {peg_pos[2]:.4f}]")
+            print(f"✓ Target set 50mm above peg: [{self.target_pos[0]:.4f}, {self.target_pos[1]:.4f}, {self.target_pos[2]:.4f}]")
         else:
-            # Default home position
-            home_pos = np.array([0.5, 0.1, 0.85])
-            home_quat = np.array([0.0, 1.0, 0.0, 0.0])
-            gripper_angle = 0.3
+            # No peg, use current position
+            current_pos = self.data.site_xpos[self.ee_site_id].copy()
+            self.target_pos = current_pos.copy()
+            print(f"✓ Starting at current position: [{self.target_pos[0]:.4f}, {self.target_pos[1]:.4f}, {self.target_pos[2]:.4f}]")
         
-        # Set target and execute
-        self.controller.set_target_task_space(
-            position=home_pos,
-            quaternion=home_quat,
-            gripper_angle=gripper_angle
-        )
-        success = self.controller.update_control(step_ik=True)
+        self.target_rpy = np.array([0.0, np.pi, 0.0])  # Downward-facing
         
-        if success:
-            print("✅ Reset complete")
-            stabilize_robot(self.model, self.data, num_steps=100)
+        # Initialize joint cache with current configuration
+        self.last_joint_config = np.array([self.data.qpos[jid] for jid in self.joint_ids])
+        
+        # Now move to target position above peg
+        print("Moving to position above peg...")
+        if self.move_to_target():
+            print("✓ Ready at position above peg")
         else:
-            print("⚠️  Reset may not be exact, but robot moved")
+            print("⚠️  Could not reach target position")
         
-        self.controller.print_status()
-    
-    def _simulation_loop(self):
-        """Background thread: run MuJoCo simulation and update control"""
+        print(f"✓ Starting at current position: [{self.target_pos[0]:.4f}, {self.target_pos[1]:.4f}, {self.target_pos[2]:.4f}]")
         
+        print("\n" + "="*70)
+        print("CONTINUOUS KEY PRESS CONTROL")
+        print("="*70)
+        print("Controls (HOLD keys for continuous movement):")
+        print("  Position: W/S (X±)  A/D (Y±)  Q/E (Z±)")
+        print("  Rotation: I/K (Roll±)  J/L (Pitch±)  U/O (Yaw±)")
+        print("  Gripper:  C (close +0.1)  V (open -0.1)  [Range: 0.0-1.6]")
+        print("  Utility:  H (home)  P (print status)  T (test grasp)  X (exit)")
+        print("="*70 + "\n")
+        
+        self.print_status()
+        
+        # Launch passive viewer
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+            print("\n✅ Viewer started. Press and HOLD keys in console!\n")
             
-            # Configure camera
-            viewer.cam.distance = 1.5
-            viewer.cam.lookat = [0.5, 0.0, 0.85]
-            viewer.cam.elevation = -20
-            viewer.cam.azimuth = 135
-            
-            last_update = time.time()
-            update_interval = 0.2  # Update control every 200ms (reduce shakiness)
-            
-            print("✓ MuJoCo viewer launched - use GUI to control robot")
-            
-            while viewer.is_running() and self.gui.running:
+            while viewer.is_running():
+                moved = False
                 
-                # Update control from GUI at specified interval
-                if time.time() - last_update > update_interval:
-                    try:
-                        # Get target from GUI
-                        target_pos, target_quat, target_gripper = self.gui.get_target_pose()
-                        
-                        # Set target
-                        self.controller.set_target_task_space(
-                            position=target_pos,
-                            quaternion=target_quat,
-                            gripper_angle=target_gripper
-                        )
-                        
-                        # Update control (IK + actuators)
-                        self.controller.update_control(step_ik=True)
-                    except Exception as e:
-                        print(f"⚠️  Control update error: {e}")
+                # Check for key press (non-blocking)
+                if msvcrt.kbhit():
+                    key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
                     
-                    last_update = time.time()
+                    # Position commands
+                    if key == 'w':
+                        self.target_pos[0] += self.pos_step
+                        moved = True
+                    elif key == 's':
+                        self.target_pos[0] -= self.pos_step
+                        moved = True
+                    elif key == 'a':
+                        self.target_pos[1] -= self.pos_step
+                        moved = True
+                    elif key == 'd':
+                        self.target_pos[1] += self.pos_step
+                        moved = True
+                    elif key == 'q':
+                        self.target_pos[2] += self.pos_step
+                        moved = True
+                    elif key == 'e':
+                        self.target_pos[2] -= self.pos_step
+                        moved = True
+                    
+                    # Rotation commands
+                    elif key == 'i':
+                        self.target_rpy[0] += self.rot_step
+                        moved = True
+                    elif key == 'k':
+                        self.target_rpy[0] -= self.rot_step
+                        moved = True
+                    elif key == 'j':
+                        self.target_rpy[1] -= self.rot_step
+                        moved = True
+                    elif key == 'l':
+                        self.target_rpy[1] += self.rot_step
+                        moved = True
+                    elif key == 'u':
+                        self.target_rpy[2] -= self.rot_step
+                        moved = True
+                    elif key == 'o':
+                        self.target_rpy[2] += self.rot_step
+                        moved = True
+                    
+                    # Gripper commands (continuous 0.0 to 1.6)
+                    elif key == 'c':
+                        self.gripper_value = min(1.6, self.gripper_value + self.gripper_step)
+                        if self.has_gripper:
+                            for grip_id in self.gripper_actuator_ids:
+                                self.data.ctrl[grip_id] = self.gripper_value
+                        print(f"Gripper: {self.gripper_value:.1f}")
+                    elif key == 'v':
+                        self.gripper_value = max(0.0, self.gripper_value - self.gripper_step)
+                        if self.has_gripper:
+                            for grip_id in self.gripper_actuator_ids:
+                                self.data.ctrl[grip_id] = self.gripper_value
+                        print(f"Gripper: {self.gripper_value:.1f}")
+                    
+                    # Utility commands
+                    elif key == 'h':
+                        self.target_pos = np.array([0.629, 0.0, 0.885])
+                        self.target_rpy = np.array([0.0, np.pi, 0.0])
+                        print("Home position (safe)")
+                        moved = True
+                    elif key == 'p':
+                        self.print_status()
+                    elif key == 't':
+                        # Test grasp: close gripper on peg without moving
+                        print("\n🧪 Testing grasp...")
+                        print("  1. Opening gripper...")
+                        self.gripper_value = 0.0
+                        for _ in range(50):
+                            if self.has_gripper:
+                                for grip_id in self.gripper_actuator_ids:
+                                    self.data.ctrl[grip_id] = 0.0
+                            mujoco.mj_step(self.model, self.data)
+                            viewer.sync()
+                        
+                        print("  2. Descending to peg...")
+                        if self.has_peg:
+                            peg_pos = self.data.xpos[self.peg_body_id].copy()
+                            self.target_pos = peg_pos + np.array([0.0, 0.0, 0.005])  # 5mm above
+                            self.move_to_target()
+                        
+                        print("  3. Closing gripper to 1.0...")
+                        self.gripper_value = 1.0
+                        for _ in range(100):
+                            if self.has_gripper:
+                                for grip_id in self.gripper_actuator_ids:
+                                    self.data.ctrl[grip_id] = 1.0
+                            mujoco.mj_step(self.model, self.data)
+                            viewer.sync()
+                        
+                        print("  4. Testing lift (10mm up)...")
+                        if self.has_peg:
+                            self.target_pos[2] += 0.010  # Lift 10mm
+                            self.move_to_target()
+                        
+                        # Check result
+                        self.print_status()
+                        
+                    elif key == 'x':
+                        print("Exiting...")
+                        break
                 
-                # Step simulation
-                mujoco.mj_step(self.model, self.data)
+                # If pose changed, run IK
+                if moved:
+                    self.move_to_target()
+                    # move_to_target() already does physics steps with gripper maintained
+                    # NO extra mj_step() needed here!
+                else:
+                    # Only step simulation if no movement command
+                    # MAINTAIN GRIPPER even during idle steps
+                    if self.has_gripper:
+                        for grip_id in self.gripper_actuator_ids:
+                            self.data.ctrl[grip_id] = self.gripper_value
+                    mujoco.mj_step(self.model, self.data)
+                
                 viewer.sync()
-                
-                time.sleep(0.001)
-            
-            print("\n✓ MuJoCo viewer closed")
-            self.gui.running = False
-    
-    def run_interactive(self):
-        """Run interactive control: GUI in main thread, simulation in background"""
+                time.sleep(0.01)
         
-        print("\n🎬 Starting interactive simulation...")
-        print("   GUI will open shortly - use sliders to control robot\n")
-        
-        # Start simulation in background thread (NOT GUI - tkinter must be in main)
-        sim_thread = threading.Thread(target=self._simulation_loop, daemon=True)
-        sim_thread.start()
-        
-        # Wait a moment for MuJoCo to initialize
-        time.sleep(0.5)
-        
-        # Run GUI in main thread (tkinter requirement)
-        self.gui.run()
-        
-        print("\n✓ GUI closed")
-    
+        print("\n✅ Controller stopped")
+
+
 def main():
-    """Main function"""
-    
+    """Main entry point"""
     print("\n" + "="*70)
-    print("🎮 7-DOF TASK SPACE CONTROLLER")
+    print("CONTINUOUS KEY PRESS CONTROL")
     print("="*70)
+    print("• HOLD keys to continuously control EEF pose")
+    print("• Gripper: 0.0 to 1.6 with 0.1 resolution (C/V keys)")
+    print("• IK updates automatically, visualization in real-time")
+    print("="*70 + "\n")
     
-    # Create controller
-    demo = PegInHoleTaskController()
-    demo.run_interactive()
+    controller = TaskSpaceController()
+    controller.run_manual_control()
 
 
 if __name__ == "__main__":
