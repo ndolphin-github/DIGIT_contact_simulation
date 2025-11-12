@@ -9,7 +9,7 @@
     <default>
         <material specular="0.5" shininess="0.25"/>
         <joint axis="0 1 0" range="-3.14 3.14" armature="0.1"/>
-        <geom type="mesh" contype="1" conaffinity="1" group="2" solref="0.002 1" solimp="0.95 0.99 0.001"/>
+        <geom type="mesh" contype="1" conaffinity="1" group="2" solref="0.002 1" solimp="0.95 0.99 0.001" friction="1.0 0.005 0.0001"/>
         <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
     </default>
 
@@ -164,7 +164,8 @@
                           <!-- DIGIT GelTip Right Sensor -->
                           <body name="digit_geltip_right" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0 ">
                             <inertial mass="0.01" pos="0 0 0" diaginertia="0.00001 0.00001 0.00001"/>
-                            <geom name="digit_geltip_right_geom" mesh="digit_geltip_right" material="digit_gel" type="mesh" contype="1" conaffinity="1"/>
+                            <geom name="digit_geltip_right_geom" mesh="digit_geltip_right" material="digit_gel" type="mesh" contype="1" conaffinity="1"
+                            friction="2.0 0.1 0.05" solref="0.001 1" solimp="0.99 0.999 0.0001"/>
                             <!-- Sensor coordinate frame -->
                             <site name="digit_right_frame" pos="0 0 0" size="0.002" type="sphere" rgba="0.564 0.835 1 0.7"/>
                           </body>
@@ -186,7 +187,8 @@
                           <!-- DIGIT GelTip Left Sensor -->
                           <body name="digit_geltip_left" pos="0.0 -0.0 0.0" quat="1.0 0.0 0.0 0">
                             <inertial mass="0.01" pos="0 0 0" diaginertia="0.00001 0.00001 0.00001"/>
-                            <geom name="digit_geltip_left_geom" mesh="digit_geltip_left" material="digit_gel" type="mesh" contype="1" conaffinity="1"/>
+                            <geom name="digit_geltip_left_geom" mesh="digit_geltip_left" material="digit_gel" type="mesh" contype="1" conaffinity="1"
+                            friction="2.0 0.1 0.05" solref="0.001 1" solimp="0.99 0.999 0.0001"/>
                             <!-- Sensor coordinate frame -->
                             <site name="digit_left_frame" pos="0 0 0" size="0.002" type="sphere" rgba="0.564 0.835 1 0.7"/>
                           </body>

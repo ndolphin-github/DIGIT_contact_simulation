@@ -170,8 +170,8 @@ class TaskSpaceController:
             max_diff = MAX_JOINT_CHANGE
         
         # 더 많은 interpolation steps = 더 부드러운 움직임 (V2는 500-1000!)
-        num_steps = max(100, int(max_diff * 500))  # 훨씬 더 많은 스텝
-        num_steps = min(num_steps, 500)  # Cap을 500으로 증가 (V2 스타일)
+        num_steps = max(100, int(max_diff * 100))  # 훨씬 더 많은 스텝
+        num_steps = min(num_steps, 50)  # Cap을 500으로 증가 (V2 스타일)
         
         # Track peg position before movement
         peg_held_before = False
