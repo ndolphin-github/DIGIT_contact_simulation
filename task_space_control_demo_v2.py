@@ -17,7 +17,8 @@ import os
 
 from simple_ik_legacy import move_to_target_pose, DEFAULT_INITIAL_JOINTS
 from gripper_digit_sensor import GripperDIGITSensor
-# # python train_simple_depth.py --image_root DeltaImages_320x240 --nodal_root ReducedNodalData --epochs 100 --batch_size 16 --contact_weight 5.0 --lr 1e-3
+
+Initial_peg_position=[0.5, 0.2, 0.81] ###
 
 
 class TaskSpaceControllerV2:
@@ -37,7 +38,7 @@ class TaskSpaceControllerV2:
             self.has_peg = True
         except:
             self.has_peg = False
-            print("⚠️ Peg not found in model")
+            print("Peg not found")
         
         # Get arm joint IDs
         joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -69,14 +70,14 @@ class TaskSpaceControllerV2:
             # Load FEM grid for high-resolution data (2552 nodes)
             self.fem_grid = self.digit_left.load_fem_grid('filtered_FEM_grid.csv')
             if self.fem_grid is not None:
-                print(f"✅ FEM grid loaded: {len(self.fem_grid)} nodes")
+                print(f" FEM grid loaded: {len(self.fem_grid)} nodes")
             else:
-                print("⚠️ FEM grid not loaded - will use sparse contact data only")
+                print(" FEM grid not loaded - will use sparse contact data only")
                 
         except Exception as e:
             self.has_digit_sensors = False
             self.fem_grid = None
-            print(f"⚠️ DIGIT sensors not initialized: {e}")
+            print(f" DIGIT sensors not initialized: {e}")
         
         # Movement step size
         self.pos_step = 0.001  # 1mm
@@ -103,7 +104,7 @@ class TaskSpaceControllerV2:
         self.session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_filename = os.path.join(self.output_dir, f"session_{self.session_timestamp}.csv")
         
-        print("✅ Task Space Controller V2 initialized")
+        print(" Task Space Controller V2 initialized")
         print(f"   Position step: {self.pos_step*1000:.2f}mm")
         print(f"   Rotation step: {np.rad2deg(self.rot_step):.2f}°")
         print(f"   Gripper range: 0.0 to 1.6, step: {self.gripper_step}")
@@ -115,7 +116,7 @@ class TaskSpaceControllerV2:
         if self.has_peg:
             peg_qpos_addr = self.model.body_jntadr[self.peg_body_id]
             # Position: X=0.4, Y=0.2, Z=0.81 (AWAY from robot, on table surface)
-            self.data.qpos[peg_qpos_addr:peg_qpos_addr+3] = [0.4, 0.2, 0.81]
+            self.data.qpos[peg_qpos_addr:peg_qpos_addr+3] = Initial_peg_position   ### Initial peg position###
             # Orientation: identity quaternion [w, x, y, z]
             self.data.qpos[peg_qpos_addr+3:peg_qpos_addr+7] = [1, 0, 0, 0]
             # Zero velocity
@@ -237,10 +238,10 @@ class TaskSpaceControllerV2:
         - Columns 2560-5111: right sensor distance field (2552 values, mm)
         """
         if len(self.sensor_data_rows) == 0:
-            print("⚠️ No data recorded in this session")
+            print(" No data recorded in this session")
             return
         
-        print(f"\n💾 Saving session data...")
+        print(f"\n Saving session data...")
         print(f"   Rows: {len(self.sensor_data_rows)}")
         print(f"   Columns: 5112 (timestamp + gripper + 6 joints + 2×2552 sensors)")
         
@@ -256,14 +257,14 @@ class TaskSpaceControllerV2:
             writer.writerow(header)
             writer.writerows(self.sensor_data_rows)
         
-        print(f"✅ Session data saved: {self.session_filename}")
+        print(f" Session data saved: {self.session_filename}")
         print(f"   File size: {os.path.getsize(self.session_filename) / 1024 / 1024:.2f} MB")
     
     def toggle_recording(self):
         """Toggle sensor data recording"""
         self.recording_enabled = not self.recording_enabled
         status = "ENABLED" if self.recording_enabled else "DISABLED"
-        print(f"\n📊 Sensor Data Recording: {status}")
+        print(f"\n Sensor Data Recording: {status}")
         
         if self.recording_enabled:
             self.sensor_data_rows.clear()
@@ -278,19 +279,19 @@ class TaskSpaceControllerV2:
         sensor_data = self.capture_sensor_data()
         if sensor_data is not None:
             self.add_data_row(sensor_data)
-            print(f"✅ Snapshot added to session data ({len(self.sensor_data_rows)} total frames)")
+            print(f" Snapshot added to session data ({len(self.sensor_data_rows)} total frames)")
     
     def print_sensor_status(self):
         """Print current DIGIT sensor status"""
         if not self.has_digit_sensors:
-            print("⚠️ DIGIT sensors not available")
+            print(" DIGIT sensors not available")
             return
         
         sensor_data = self.capture_sensor_data()
         if sensor_data is None:
             return
         
-        print(f"\n📊 DIGIT Sensor Status (t={sensor_data['timestamp']:.3f}s):")
+        print(f"\n DIGIT Sensor Status (t={sensor_data['timestamp']:.3f}s):")
         print(f"   LEFT sensor:  {sensor_data['left_sensor']['num_contacts']} contacts")
         print(f"   RIGHT sensor: {sensor_data['right_sensor']['num_contacts']} contacts")
         print(f"   Gripper: {self.gripper_value:.3f}")
@@ -345,8 +346,7 @@ class TaskSpaceControllerV2:
         # Get target joints from IK solution (from SEPARATE data!)
         target_joints = np.array([ik_data.qpos[jid] for jid in self.joint_ids])
         
-        # Original simulation data is COMPLETELY UNTOUCHED!
-        # Peg position, contacts, everything preserved!
+        # Peg position, contacts, everything preserved
         
         # Calculate joint differences
         joint_diff = target_joints - current_joints
@@ -406,7 +406,7 @@ class TaskSpaceControllerV2:
             peg_pos_after = self.data.xpos[self.peg_body_id].copy()
             dist_after = np.linalg.norm(peg_pos_after - ee_pos_after)
             if dist_after > 0.050:
-                print(f"⚠️  PEG DROPPED! Distance: {dist_before*1000:.1f}mm → {dist_after*1000:.1f}mm")
+                print(f"  PEG DROPPED! Distance: {dist_before*1000:.1f}mm → {dist_after*1000:.1f}mm")
         
         # CACHE final joint configuration for next iteration (prevents oscillation)
         self.last_joint_config = target_joints.copy()
@@ -427,7 +427,7 @@ class TaskSpaceControllerV2:
         """Print current target pose with peg tracking"""
         ee_pos = self.data.site_xpos[self.ee_site_id]
         
-        print(f"\n📊 Target Pose:")
+        print(f"\n Target Pose:")
         print(f"   Position: X={self.target_pos[0]:.4f} Y={self.target_pos[1]:.4f} Z={self.target_pos[2]:.4f}")
         print(f"   EE Actual: X={ee_pos[0]:.4f} Y={ee_pos[1]:.4f} Z={ee_pos[2]:.4f}")
         print(f"   Rotation: R={np.rad2deg(self.target_rpy[0]):.1f}° P={np.rad2deg(self.target_rpy[1]):.1f}° Y={np.rad2deg(self.target_rpy[2]):.1f}°")
@@ -477,7 +477,7 @@ class TaskSpaceControllerV2:
         if self.move_to_target():
             print("✓ Ready at position above peg")
         else:
-            print("⚠️  Could not reach target position")
+            print("  Could not reach target position")
         
         print("\n" + "="*70)
         print("TASK SPACE CONTROLLER V2 - WITH DIGIT SENSOR DATA TRACKING")
@@ -494,7 +494,7 @@ class TaskSpaceControllerV2:
         
         # Launch passive viewer
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
-            print("\n✅ Viewer started. Press and HOLD keys in console!\n")
+            print("\n Viewer started. Press and HOLD keys in console!\n")
             
             while viewer.is_running():
                 moved = False
