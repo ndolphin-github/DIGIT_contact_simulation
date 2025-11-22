@@ -4,6 +4,8 @@ import mujoco
 import mujoco.viewer
 import threading
 import time
+import pandas as pd
+from scipy.interpolate import RBFInterpolator
 from modular_digit_sensor import ModularDIGITSensor, UniversalMeshExtractor
 
 # ===== PERFORMANCE CONFIGURATION =====
@@ -26,21 +28,13 @@ class MuJoCoControlledDIGITDemo:
         self.indenter_x_mm = 0.0
         self.indenter_y_mm = 7.5
         
-        # Data for plotting
-        self.contact_history = []
-        self.force_history = []
-        self.depth_history = []
-        self.field_history = []
-        self.time_history = []
-        self.start_time = time.time()
+        # FEM grid for high-resolution visualization (loaded by sensor)
+        self.fem_grid = None
         
         # Matplotlib components
         self.fig = None
         self.ax_contact = None
-        self.ax_force = None
-        self.ax_depth = None
         self.ax_field = None
-        self.ax_stats = None
         
         # Colorbars (to update them properly)
         self._contact_colorbar = None
@@ -51,7 +45,7 @@ class MuJoCoControlledDIGITDemo:
         self.update_interval = PLOT_UPDATE_INTERVAL
         self.enable_field_visualization = ENABLE_FIELD_VISUALIZATION
         self.field_fast_mode = FIELD_FAST_MODE
-        
+    
     def create_scene_with_controls(self):
         """Create scene with MuJoCo actuators for GUI control"""
         
@@ -67,7 +61,7 @@ class MuJoCoControlledDIGITDemo:
     
     <asset>
         <mesh name="digit_geltip" file="DIGIT_GelTip.STL" scale="0.001 0.001 0.001"/>
-        <mesh name="indenter" file="indenters/line.STL" scale="0.001 0.001 0.001"/>
+        <mesh name="indenter" file="indenters/square.STL" scale="0.001 0.001 0.001"/>
     </asset>
     
     <worldbody>
@@ -139,57 +133,49 @@ class MuJoCoControlledDIGITDemo:
             object_geom_name="indenter_geom"
         )
         
-      
+        # Load FEM grid for high-resolution visualization
+        self.fem_grid = self.digit_sensor.load_fem_grid()
         
     def setup_simple_plots(self):
-        """Setup simplified matplotlib window: contact patch, force/depth, and statistics"""
+        """Setup matplotlib window: contact patch and FEM grid heatmap side-by-side"""
         
-        self.fig = plt.figure(figsize=(5, 2))
-        gs = self.fig.add_gridspec(1, 3, hspace=0.3, wspace=0.3)
+        self.fig = plt.figure(figsize=(10, 5))
+        gs = self.fig.add_gridspec(1, 2, hspace=0.3, wspace=0.3)
         
-        # Left: Contact patch with intensity coloring
+        # Left: Contact patch with intensity coloring (sparse MuJoCo data)
         self.ax_contact = self.fig.add_subplot(gs[0, 0])
         self.ax_contact.set_xlim(-10, 10)
         self.ax_contact.set_ylim(0, 20)
-        self.ax_contact.set_xlabel('X (mm)')
-        self.ax_contact.set_ylabel('Y (mm)')
-        self.ax_contact.set_title('Contact Patch (Colored by Proximity)', fontweight='bold')
+        self.ax_contact.set_xlabel('X (mm)', fontsize=12)
+        self.ax_contact.set_ylabel('Y (mm)', fontsize=12)
+        self.ax_contact.set_title('Contact Patch (Sparse MuJoCo ~1000 nodes)', fontweight='bold', fontsize=12)
         self.ax_contact.grid(True, alpha=0.3)
+        self.ax_contact.set_aspect('equal', adjustable='box')
         
         # Add sensor ROI boundary
-        roi_rect = plt.Rectangle((-7.5, 0), 15, 15, 
+        roi_rect = plt.Rectangle((-7.5, 0), 15, 20, 
                                linewidth=2, edgecolor='green', 
                                facecolor='none', linestyle='--')
         self.ax_contact.add_patch(roi_rect)
         
-        # Center: Force and distance over time
-        self.ax_force = self.fig.add_subplot(gs[0, 1])
-        self.ax_force.set_xlabel('Time (s)')
-        self.ax_force.set_ylabel('Force (N)', color='blue')
-        self.ax_force.set_title('Force and Distance Over Time', fontweight='bold')
-        self.ax_force.tick_params(axis='y', labelcolor='blue')
-        self.ax_force.grid(True, alpha=0.3)
-        
-        # Secondary y-axis for distance
-        self.ax_depth = self.ax_force.twinx()
-        self.ax_depth.set_ylabel('Min Distance (mm)', color='red')
-        self.ax_depth.tick_params(axis='y', labelcolor='red')
-        
-        # Right: Statistics panel
-        self.ax_stats = self.fig.add_subplot(gs[0, 2])
-        self.ax_stats.axis('off')
-        self.ax_stats.set_title('Real-time Statistics', fontweight='bold')
+        # Right: High-resolution FEM grid heatmap (interpolated dense data)
+        self.ax_field = self.fig.add_subplot(gs[0, 1])
+        self.ax_field.set_xlim(-10, 10)
+        self.ax_field.set_ylim(0, 20)
+        self.ax_field.set_xlabel('X (mm)', fontsize=12)
+        self.ax_field.set_ylabel('Y (mm)', fontsize=12)
+        self.ax_field.set_title('High-Res Distance Field (FEM Grid 2553 nodes)', fontweight='bold', fontsize=12)
+        self.ax_field.set_aspect('equal', adjustable='box')
         
         plt.ion()  # Interactive mode
         plt.show(block=False)
         
-        print("✓ Simplified plots setup:")
-        print("  - Contact patch with depth coloring")
-        print("  - Force and depth time series")
-        print("  - Real-time statistics")
+        print("✓ Enhanced plots setup:")
+        print("  - Contact patch with sparse MuJoCo contacts (left)")
+        print("  - High-resolution FEM grid heatmap (right)")
         
     def update_plots(self):
-        """Update all plots with enhanced sensor data"""
+        """Update both plots with enhanced sensor data"""
         
         # Get contact data
         world_vertices = self.indenter_extractor.get_world_vertices(self.data)
@@ -198,27 +184,13 @@ class MuJoCoControlledDIGITDemo:
         # Get enhanced sensor data (optimized - field disabled)
         stats = self.digit_sensor.get_contact_statistics(contacts)
         
-        # Update history
-        current_time = time.time() - self.start_time
-        self.contact_history.append(len(contacts))
-        self.force_history.append(stats['estimated_force_N'])
-        self.depth_history.append(stats['min_distance_from_plane_mm'])
-        self.time_history.append(current_time)
-        
-        # Keep reasonable history
-        if len(self.time_history) > 200:
-            self.contact_history = self.contact_history[-200:]
-            self.force_history = self.force_history[-200:]
-            self.depth_history = self.depth_history[-200:]
-            self.time_history = self.time_history[-200:]
-        
-        # ===== 1. Contact Patch Plot (colored by depth) =====
+        # ===== 1. Contact Patch Plot (colored by intensity) =====
         self.ax_contact.clear()
         self.ax_contact.set_xlim(-10, 10)
         self.ax_contact.set_ylim(0, 20)
         
         # Redraw ROI boundary
-        roi_rect = plt.Rectangle((-7.5, 0), 15, 15, 
+        roi_rect = plt.Rectangle((-7.5, 0), 15, 20, 
                                linewidth=2, edgecolor='green', 
                                facecolor='none', linestyle='--')
         self.ax_contact.add_patch(roi_rect)
@@ -228,74 +200,81 @@ class MuJoCoControlledDIGITDemo:
             contact_y = [c['y_mm'] for c in contacts]
             intensities = [c['intensity'] for c in contacts]
             
-            # Color by intensity (proximity to sensing plane: blue=far, red=close)
+            # Color by distance (same as FEM grid for consistency)
+            distances = [c['distance_from_plane_mm'] for c in contacts]
+            
             scatter = self.ax_contact.scatter(contact_x, contact_y, 
-                                             c=intensities, cmap='RdYlBu_r',
-                                             s=50, alpha=0.8, edgecolors='black',
-                                             vmin=0, vmax=1.0)
+                                             c=distances, cmap='plasma',
+                                             s=30, alpha=0.8, edgecolors='black',
+                                             vmin=0, vmax=0.3)
             
             # Add colorbar
             if not hasattr(self, '_contact_colorbar') or self._contact_colorbar is None:
-                self._contact_colorbar = plt.colorbar(scatter, ax=self.ax_contact, label='Intensity')
+                self._contact_colorbar = plt.colorbar(scatter, ax=self.ax_contact, label='Distance (mm)')
             else:
                 self._contact_colorbar.update_normal(scatter)
             
-            self.ax_contact.text(-9, 18.5, f'Contacts: {len(contacts)}', fontweight='bold', fontsize=10)
-            self.ax_contact.text(-9, 17, f'Min Dist: {stats["min_distance_from_plane_mm"]:.4f}mm', fontweight='bold', fontsize=10)
+            self.ax_contact.text(-9, 18.5, f'Contacts: {len(contacts)}', fontweight='bold', fontsize=11,
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            self.ax_contact.text(-9, 17, f'Min Dist: {stats["min_distance_from_plane_mm"]:.4f}mm', 
+                                fontweight='bold', fontsize=11,
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         else:
             self.ax_contact.text(0, 10, 'NO CONTACT', ha='center', fontsize=16, color='gray', fontweight='bold')
             
-        self.ax_contact.set_xlabel('X (mm)')
-        self.ax_contact.set_ylabel('Y (mm)')
-        self.ax_contact.set_title('Contact Patch (Colored by Penetration Depth)', fontweight='bold')
+        self.ax_contact.set_xlabel('X (mm)', fontsize=12)
+        self.ax_contact.set_ylabel('Y (mm)', fontsize=12)
+        #self.ax_contact.set_title(f'Contact Patch (Sparse MuJoCo ~{len(contacts)} nodes)', fontweight='bold', fontsize=12)
         self.ax_contact.grid(True, alpha=0.3)
+        self.ax_contact.set_aspect('equal', adjustable='box')
         
-        # ===== 2. Force and Depth Time Series =====
-        if len(self.time_history) > 1:
-            # Clear both axes
-            self.ax_force.clear()
-            self.ax_depth.clear()
+        # ===== 2. High-Resolution FEM Grid Heatmap =====
+        self.ax_field.clear()
+        self.ax_field.set_xlim(-10, 10)
+        self.ax_field.set_ylim(0, 20)
+        
+        if contacts and self.fem_grid is not None:
+            # Interpolate sparse contacts to dense FEM grid using sensor's method
+            fem_distance_field = self.digit_sensor.interpolate_to_fem_grid(
+                contacts, 
+                self.fem_grid, 
+                influence_radius_mm=0.2
+            )
             
-            # Plot force
-            self.ax_force.plot(self.time_history, self.force_history, 'b-', linewidth=2, label='Force')
-            self.ax_force.fill_between(self.time_history, self.force_history, alpha=0.3, color='blue')
-            self.ax_force.set_xlabel('Time (s)')
-            self.ax_force.set_ylabel('Force (N)', color='blue')
-            self.ax_force.tick_params(axis='y', labelcolor='blue')
-            self.ax_force.grid(True, alpha=0.3)
+            # Create mask: only plot nodes with non-zero values (contact regions)
+            contact_mask = fem_distance_field > 1e-6  # Threshold for "active" nodes
             
-            # Plot distance on secondary axis
-            self.ax_depth.plot(self.time_history, self.depth_history, 'r-', linewidth=2, label='Distance')
-            self.ax_depth.set_ylabel('Min Distance (mm)', color='red')
-            self.ax_depth.tick_params(axis='y', labelcolor='red')
+            if np.any(contact_mask):
+                # Only plot contact regions (makes background truly transparent)
+                scatter_fem = self.ax_field.scatter(
+                    self.fem_grid['x'][contact_mask], 
+                    self.fem_grid['y'][contact_mask],
+                    c=fem_distance_field[contact_mask],
+                    cmap='plasma',
+                    s=8,  # Increased from 5 for smoother appearance
+                    vmin=0,
+                    vmax=0.3,
+                    alpha=1.0,  # Full opacity for continuous appearance
+                    edgecolors='none'  # Remove edges for smoother blending
+                )
+                
+                # Add colorbar
+                if not hasattr(self, '_field_colorbar') or self._field_colorbar is None:
+                    self._field_colorbar = plt.colorbar(scatter_fem, ax=self.ax_field, label='Distance (mm)')
+                else:
+                    self._field_colorbar.update_normal(scatter_fem)
             
-            self.ax_force.set_title('Force and Distance Over Time', fontweight='bold')
+            self.ax_field.text(-9, 18.5, f'FEM Nodes: {len(self.fem_grid)}', 
+                              fontweight='bold', fontsize=11, color='white',
+                              bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+        else:
+            self.ax_field.text(0, 10, 'NO CONTACT' if contacts is not None and len(contacts) == 0 else 'FEM GRID NOT LOADED', 
+                              ha='center', fontsize=14, color='gray', fontweight='bold')
         
-        # ===== 3. Statistics Panel =====
-        self.ax_stats.clear()
-        self.ax_stats.axis('off')
-        
-        stats_text = f"""
-╔══════════════════════════════════════╗
-║       REAL-TIME STATISTICS          ║
-╠══════════════════════════════════════╣
-║  Contacts: {stats['num_contacts']:4d}                    ║
-║  Avg Distance: {stats['avg_distance_from_plane_mm']:.4f} mm        ║
-║  Min Distance: {stats['min_distance_from_plane_mm']:.4f} mm        ║
-║  Estimated Force: {stats['estimated_force_N']:.4f} N        ║
-║  Contact Coverage: {stats['contact_area_coverage']:.2%}         ║
-║  Avg Intensity: {stats['avg_intensity']:.4f}             ║
-╚══════════════════════════════════════╝
-
-🎯 Features:
-✓ Distance from sensing plane
-✓ Proximity-based intensity
-✓ Real-time statistics
-✓ Optimized for performance
-"""
-        
-        self.ax_stats.text(0.1, 0.95, stats_text, transform=self.ax_stats.transAxes,
-                          fontfamily='monospace', fontsize=9, verticalalignment='top')
+        self.ax_field.set_xlabel('X (mm)', fontsize=12)
+        self.ax_field.set_ylabel('Y (mm)', fontsize=12)
+        #self.ax_field.set_title('High-Res Distance Field (FEM Grid 2553 nodes)', fontweight='bold', fontsize=12)
+        self.ax_field.set_aspect('equal', adjustable='box')
         
         # Refresh display
         plt.draw()

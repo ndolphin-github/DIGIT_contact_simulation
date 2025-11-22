@@ -205,7 +205,7 @@
       
       <!-- ========== HEXAGON PEG AND HOLE ========== -->
       <!-- Peg starts higher above the hole -->
-      <body name="hexagon_peg_body" pos="0.629 -0.0 0.875" euler="0 0 0.5236">
+      <body name="hexagon_peg_body" pos="0.629 0.0 0.875" euler="0 0 0.5236">
         <freejoint/>
         <inertial mass="0.02" pos="0 0 0" diaginertia="0.0005 0.0005 0.0005"/>
         <geom name="hexagon_peg_visual" type="mesh" mesh="hexagon_peg_mesh" rgba="0.8 0.2 0.8 1" contype="0" conaffinity="0"/>

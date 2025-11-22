@@ -1,14 +1,6 @@
-"""
-Simple and robust IK for UR5e robot
-Using Levenberg-Marquardt method for better convergence
-"""
 import numpy as np
 import mujoco
 
-
-# Default initial joint configuration (from user's image)
-# shoulder_pan: 0.26, shoulder_lift: -1.66, elbow: -1.67, 
-# wrist_1: -1.04, wrist_2: 1.57, wrist_3: -2.29
 DEFAULT_INITIAL_JOINTS = np.array([0.0, -1.57, -1.57, -1.57, 1.57, -1.57])
 
 
@@ -16,31 +8,13 @@ def move_to_target_pose(model, data, target_pos, target_quat=None,
                         max_iterations=1000, lambda_init=0.001, 
                         pos_tolerance=1e-3, ori_tolerance=0.02,
                         initial_joints=None, joint_weight=0.0):
-    """
-    Move UR5e end effector to target position and orientation using Levenberg-Marquardt
-    
-    Args:
-        model: MuJoCo model
-        data: MuJoCo data
-        target_pos: [x, y, z] target position in meters
-        target_quat: [w, x, y, z] target quaternion (None = no orientation constraint)
-        max_iterations: Maximum number of IK iterations
-        lambda_init: Initial damping parameter for LM method (smaller = closer to Gauss-Newton)
-        pos_tolerance: Position error tolerance in meters
-        ori_tolerance: Orientation error tolerance in radians
-        initial_joints: Initial joint configuration to start from (6D array, default from image)
-        joint_weight: Weight for staying close to initial_joints (0 = no penalty)
-    
-    Returns:
-        success: True if converged
-        pos_error: Final position error
-    """
+
     
     # Get end effector site
     try:
         ee_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "eef_site")
     except:
-        print("❌ Error: 'eef_site' not found")
+        print(" Error: 'eef_site' not found")
         return False, float('inf')
     
     # Get UR5e joint IDs
@@ -59,7 +33,7 @@ def move_to_target_pose(model, data, target_pos, target_quat=None,
             jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
             joint_ids.append(jid)
         except:
-            print(f"❌ Error: Joint '{name}' not found")
+            print(f" Error: Joint '{name}' not found")
             return False, float('inf')
     
     # Set initial joint configuration
@@ -72,9 +46,7 @@ def move_to_target_pose(model, data, target_pos, target_quat=None,
     else:
         # Use provided configuration - assume robot is already there
         initial_joints = np.array(initial_joints)
-        # Do NOT reset qpos - continue from current state
-        # print(f"✓ Continuing from current joint configuration")
-    
+
     # Forward kinematics to ensure state is current
     mujoco.mj_forward(model, data)
     

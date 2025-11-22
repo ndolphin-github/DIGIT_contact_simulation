@@ -19,7 +19,7 @@ FORBIDDEN_ZONE_CENTER = np.array([0.6, 0.0, 0.8])
 FORBIDDEN_ZONE_SIZE = np.array([0.065, 0.065, 0.075])  # Half-sizes
 
 # Visualization settings
-ENABLE_PLOTTING = False  # Set to False to disable real-time plotting
+ENABLE_PLOTTING = True  # Set to False to disable real-time plotting
 PLOT_UPDATE_INTERVAL = 10  # Update plots every N simulation steps
 
 # Motion control settings
